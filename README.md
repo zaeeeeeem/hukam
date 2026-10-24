@@ -35,6 +35,7 @@ Hukam router  (this repo)
 | `src/superset.mjs` | Spawns, messages, waits on and reads terminal agents via the Superset CLI |
 | `src/whatsapp.mjs` | Client for the WhatsApp MCP daemon |
 | `src/preview.mjs` | Headless Chrome screenshot of the agent's page, sent back to WhatsApp |
+| `src/artifacts.mjs` | Images an agent creates (`outputs/`, SVG rendered to PNG) are sent back to the chat that started it |
 | `src/voice.mjs` | Voice notes: ffmpeg + whisper.cpp, fully local |
 | `src/bus.mjs` | Event stream to the dashboard: DNotifier realtime, local SSE fallback |
 | `public/index.html` | Live dashboard: WhatsApp feed, Gemma decisions, agent cards |
@@ -50,6 +51,9 @@ Hukam router  (this repo)
 | 🖼️ photo / screenshot of a sketch, mockup or bug, captioned "build this" or nothing | Gemma 4 looks at the image, replies "👀 Gemma sees: …", and starts an agent pointed at the saved image (`inbox/<id>.jpg`) |
 | 📄 PDF (spec, menu, brief) + "build a page from this" | Text extracted with `pdftotext`, Gemma plans the task, the agent gets the PDF and its text in `inbox/` |
 | 🖼️/📄 + "what is this?" / "summarize" | Gemma answers in chat, no agent started |
+| "codex create an image of a chai cup logo" | Codex generates the image (built-in image generation), saves `outputs/chai-cup-logo.png`, and Hukam sends it back to the chat |
+| "make the previous logo blue" | Gemma knows the chat's recent images, sends the edit to the session that made it, and the new `-v2.png` comes back |
+| "I'll send a photo next, build a page from it" | "📎 Send the image when ready."; the next photo (within 10 min) uses that instruction as its caption |
 | *(automatic)* | When an agent changes the page, Hukam screenshots it in headless Chrome and sends the picture: a live preview on your phone |
 | `list` | All sessions and their state |
 | `stop dark-mode-toggle` | Closes that session |

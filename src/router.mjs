@@ -5,12 +5,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, statS
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { basename } from "node:path";
 import * as wa from "./whatsapp.mjs";
 import * as gemma from "./gemma.mjs";
 import * as superset from "./superset.mjs";
 import * as bus from "./bus.mjs";
 import * as voice from "./voice.mjs";
 import * as preview from "./preview.mjs";
+import * as artifacts from "./artifacts.mjs";
 
 const list = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
 const ALLOW = list(process.env.WA_ALLOW);
@@ -20,6 +22,9 @@ const OWNER = process.env.WA_OWNER || "923124487312";
 const OWNER_LID = (process.env.WA_OWNER_LID || "237077966905376@lid").split("@")[0];
 const POLL_MS = Number(process.env.WA_POLL_MS || 2000);
 const STATE_FILE = new URL("../.hukam-state.json", import.meta.url);
+// Per-chat memory: recent images (user photos and agent artifacts) and a pending "I'll send the image next" instruction.
+const CHATS_FILE = new URL("../.hukam-chats.json", import.meta.url);
+const AWAIT_MS = 10 * 60_000;
 const AGENTS = new Set(["claude", "codex", "opencode"]);
 // Photos and PDFs are copied into the agent workspace (the playground) so agents can open them.
 const WORKDIR = process.env.HUKAM_WORKSPACE_DIR || fileURLToPath(new URL("../../demo/playground", import.meta.url));
@@ -38,6 +43,51 @@ let groupsAt = 0;
 const seen = new Set();
 
 const save = () => writeFileSync(STATE_FILE, JSON.stringify([...sessions], null, 2));
+
+let chatMem = new Map();
+try {
+  if (existsSync(CHATS_FILE)) chatMem = new Map(JSON.parse(readFileSync(CHATS_FILE, "utf8")));
+} catch (err) {
+  console.error("[chats]", err.message);
+}
+const saveChats = () => {
+  try {
+    writeFileSync(CHATS_FILE, JSON.stringify([...chatMem], null, 2));
+  } catch (err) {
+    console.error("[chats]", err.message);
+  }
+};
+const memOf = (chat) => {
+  if (!chatMem.has(chat)) chatMem.set(chat, { images: [] });
+  return chatMem.get(chat);
+};
+
+// image: { path (relative to the workspace), source: "user" | "agent", session? }
+function rememberImage(chat, image) {
+  const m = memOf(chat);
+  m.images = [{ ...image, at: Date.now() }, ...m.images.filter((i) => i.path !== image.path)].slice(0, 5);
+  m.lastImage = m.images[0];
+  saveChats();
+}
+
+function imageContext(chat) {
+  const images = chatMem.get(chat)?.images || [];
+  if (!images.length) return "";
+  const ago = (t) => `${Math.max(0, Math.round((Date.now() - t) / 60_000))} min ago`;
+  return `Recent images in this chat (newest first):\n${images
+    .map((i) => `- ${i.path} ${i.source === "agent" ? `made by session ${i.session}` : "sent by the user"}, ${ago(i.at)}`)
+    .join("\n")}`;
+}
+
+// A pending instruction for the next photo/PDF in this chat, or null when absent or expired. Consumes it.
+function takeAwaiting(chat) {
+  const m = chatMem.get(chat);
+  const a = m?.awaiting;
+  if (!a) return null;
+  delete m.awaiting;
+  saveChats();
+  return Date.now() - a.at < AWAIT_MS ? a.prompt : null;
+}
 const code = () => Math.random().toString(36).slice(2, 6);
 
 function uniqueName(base) {
@@ -134,6 +184,18 @@ async function watch(session, chat, startedAt = Date.now()) {
     await reply(chat, `🔐 *${session.name}* needs you:\n${summary}\n\nReply \`@${session.name} <answer>\` or \`stop ${session.name}\`.`);
   } else {
     await reply(chat, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
+    // Images the agent created go back to the chat that started the session.
+    const target = session.owner || chat;
+    try {
+      for (const a of await artifacts.send(target, session.name, startedAt, WORKDIR)) {
+        rememberImage(target, { path: a.rel, source: "agent", session: session.name });
+        const file = basename(a.media);
+        bus.emit("reply", { text: `🎨 ${session.name}: ${a.rel}`, chat: chatLabel(target), attachment: { kind: "image", url: `/outputs/${file}`, name: file } });
+        bus.emit("artifact", { name: session.name, path: a.rel });
+      }
+    } catch (err) {
+      console.error("[artifacts]", err.message);
+    }
     // Show, don't tell: if the agent changed the page, send a screenshot of it.
     try {
       if (await preview.send(chat, session.name, startedAt)) bus.emit("preview", { name: session.name });
@@ -152,6 +214,11 @@ async function execute(intent, chat, sender = {}) {
       return reply(chat, HELP);
     case "chat":
       return reply(chat, intent.reply || HELP);
+    case "await_attachment": {
+      memOf(chat).awaiting = { prompt: intent.prompt || "Build what this shows.", at: Date.now() };
+      saveChats();
+      return reply(chat, "📎 Send the image when ready.");
+    }
     case "stop": {
       const s = sessions.get(intent.session);
       if (!s) return reply(chat, `No session named ${intent.session}.\n\n${listText()}`);
@@ -175,7 +242,7 @@ async function execute(intent, chat, sender = {}) {
       const name = uniqueName(intent.name || intent.prompt?.split(/\s+/).slice(0, 3).join("-"));
       const terminal = await superset.spawn(agent, `${intent.prompt}
 
-(Sent from WhatsApp through Hukam. Work only inside this workspace. Do not git push, deploy, or delete anything outside it. Never read, print or send .env files, keys, tokens or other secrets. Finish with a two-line summary of what you changed.)`);
+(Sent from WhatsApp through Hukam. Work only inside this workspace. Do not git push, deploy, or delete anything outside it. Save any images or other visual files you create under outputs/ in this workspace. Never read, print or send .env files, keys, tokens or other secrets. Finish with a two-line summary of what you changed.)`);
       const s = { name, agent, terminal, prompt: intent.prompt, status: "working", owner: chat };
       sessions.set(name, s);
       save();
@@ -259,6 +326,10 @@ async function handle(chat, msg, sender = { phone: chat }) {
     wa.react(chat, msg.id, msg.media === "image" ? "🖼️" : "📄", sender.jid);
     attachment = await saveAttachment(chat, msg);
     if (!attachment) return;
+    if (attachment.kind === "image") rememberImage(chat, { path: attachment.path, source: "user" });
+    // "I'll send the photo next, build X from it": the stored instruction becomes the caption.
+    const waiting = takeAwaiting(chat);
+    if (waiting && (msg.body || "").trim().length < 25) msg.body = `${waiting}${msg.body?.trim() ? ` (${msg.body.trim()})` : ""}`;
   } else if (msg.media) {
     return reply(chat, `I can read text, voice notes, photos and PDFs. ${msg.media} isn't supported yet.`);
   }
@@ -291,7 +362,7 @@ async function handle(chat, msg, sender = { phone: chat }) {
 
   if (attachment) {
     try {
-      intent = await gemma.routeWithAttachment(msg.body, [...sessions.values()], attachment);
+      intent = await gemma.routeWithAttachment(msg.body, [...sessions.values()], attachment, imageContext(chat));
       bus.emit("intent", { model: gemma.model, intent, attachment: attachment.url });
       if (intent.description) await reply(chat, `👀 Gemma sees: ${intent.description}`);
     } catch (err) {
@@ -301,7 +372,7 @@ async function handle(chat, msg, sender = { phone: chat }) {
     }
   } else if (!intent) {
     try {
-      intent = await gemma.route(msg.body, [...sessions.values()]);
+      intent = await gemma.route(msg.body, [...sessions.values()], imageContext(chat));
       bus.emit("intent", { model: gemma.model, intent });
     } catch (err) {
       console.error("[gemma]", err.message);
@@ -408,7 +479,7 @@ for (const chat of [...ALLOW, ...GROUPS]) {
   for (const m of await wa.recent(chat, 30)) seen.add(keyOf(m));
 }
 await refreshGroups(true);
-await bus.start({ inbox: INBOX });
+await bus.start({ inbox: INBOX, outputs: artifacts.MEDIA_ROOT });
 for (const s of sessions.values()) if (s.status === "working") watch(s, s.owner);
 bus.emit("ready", {
   allow: ALLOW.map((p) => `…${p.slice(-4)}`),

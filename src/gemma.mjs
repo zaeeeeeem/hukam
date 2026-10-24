@@ -103,7 +103,7 @@ function extractJson(text) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-function routePrompt(message, sessions, attachmentNote = "") {
+function routePrompt(message, sessions, attachmentNote = "", context = "") {
   const list = sessions.length
     ? sessions.map((s) => `- ${s.name} (${s.agent}, ${s.status}): ${s.prompt.slice(0, 80)}`).join("\n")
     : "(none)";
@@ -117,6 +117,10 @@ Actions:
 - "status": ask what a session (or all) is doing. "session" optional.
 - "stop": stop a session. Needs "session".
 - "chat": the message is not a task (greeting, question about Hukam). Put a short answer in "reply".
+- "await_attachment": the developer says they will send a photo, image, screenshot or PDF next and gives the instruction for it ("I'll send a photo next, build a page from it", "next image ke saath yeh karna"). Put that instruction in "prompt" (in English). Do NOT use this if no future attachment is mentioned.
+
+Images: if the message asks to create, make, generate, draw or design an image, logo, poster, icon, banner, illustration or picture, use "spawn" with agent "codex" (unless the developer explicitly names another agent) and write "prompt" as a complete task that first restates WHAT to draw (subject, style, colors, any text, from the developer's message), then says: use your built-in image generation tool if available (otherwise draw it as SVG and export a PNG), and save the final image as PNG at outputs/<short-kebab-name>.png. Example prompt: "Create a flat minimalist logo of a steaming chai cup in warm brown and orange. Use your built-in image generation tool if available (otherwise draw it as SVG and export a PNG). Save the final image as PNG at outputs/chai-cup-logo.png." Image creation is "low" risk.
+Editing images: if the message refers to a previous image or logo ("make the logo blue", "edit the previous image", "update that picture"), use the "Recent images in this chat" list. If the image was made by a session that is in the active list and not stopped/exited, use "send" to that session; otherwise "spawn" agent "codex". Either way the "prompt" must name the exact file path of the image, say what to change, and say to save the edited version as a NEW PNG under outputs/ (e.g. outputs/<name>-v2.png) without overwriting the original.
 
 Always include "risk". Agents work in a sandboxed git worktree, so reading, writing, editing, refactoring and testing code there is NORMAL and "low".
 Use "high" ONLY when the task would affect something outside that worktree: git push or merge to a shared branch, deploy or release, delete data or files outside the project, change cloud/infrastructure/DNS, read or change secrets or credentials, send messages or emails to other people, or spend money.
@@ -128,30 +132,32 @@ The message may be English, Urdu or Roman Urdu. Write "prompt" in English.
 Active sessions:
 ${list}
 
-${attachmentNote}Developer message:
+${context ? `${context}\n\n` : ""}${attachmentNote}Developer message:
 """${message}"""
 
 JSON shape: {"action":"","agent":null,"session":null,"name":null,"prompt":null,"risk":"low","reason":"","reply":null${attachmentNote ? ',"description":""' : ""}}`;
   return prompt;
 }
 
-export async function route(message, sessions) {
-  return extractJson(await generate(routePrompt(message, sessions)));
+// context: optional extra lines for the prompt, e.g. "Recent images in this chat: ...".
+export async function route(message, sessions, context = "") {
+  return extractJson(await generate(routePrompt(message, sessions, "", context)));
 }
 
 // A photo or PDF arrived (with an optional caption). Gemma looks at it and returns route()'s intent plus "description".
 // att: { kind: "image" | "pdf", path (relative to the agent workspace), mime, base64 (images), text (PDF text) }
-export async function routeWithAttachment(caption, sessions, att) {
+export async function routeWithAttachment(caption, sessions, att, context = "") {
   const what = att.kind === "pdf" ? "a PDF document" : "an image (photo, screenshot, sketch or mockup)";
   const note = `The developer attached ${what}. It is saved in the agent's workspace at ${att.path}.
 ${att.kind === "pdf" ? `Extracted text of the PDF (may be truncated):\n"""${(att.text || "(no text found)").slice(0, 15_000)}"""\n` : "The image is included above.\n"}
 Also include "description": 1-2 plain sentences on what the attachment shows or contains.
-If the message is empty or asks to build, make, fix, add or change something, use "spawn" (agent claude unless another is named) and write "prompt" as a complete task for the agent: say the reference file is at ${att.path} and that it must open it and use it, then describe concretely what to build or fix based on what you see.
+If the message asks to edit or restyle the attached image itself ("make this blue", "remove the background"), use "spawn" with agent "codex" (unless another is named) and say to save the edited image as a new PNG under outputs/.
+Otherwise, if the message is empty or asks to build, make, fix, add or change something, use "spawn" (agent claude unless another is named) and write "prompt" as a complete task for the agent: say the reference file is at ${att.path} and that it must open it and use it, then describe concretely what to build or fix based on what you see.
 If the message only asks a question about the attachment ("what is this?", "summarize this"), use "chat" and put the answer in "reply" (WhatsApp-sized, max 8 short lines).
 
 `;
   const image = att.kind === "image" ? { mime: att.mime, base64: att.base64 } : null;
-  const intent = extractJson(await generate(routePrompt(caption || "(no message, only the attachment)", sessions, note), 1200, image));
+  const intent = extractJson(await generate(routePrompt(caption || "(no message, only the attachment)", sessions, note, context), 1200, image));
   if (["spawn", "send"].includes(intent.action) && !String(intent.prompt || "").includes(att.path)) {
     intent.prompt = `${intent.prompt || "Build what the attached reference shows."}\n\nReference file: ${att.path} (open it and use it).`;
   }

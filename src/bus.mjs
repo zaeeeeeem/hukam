@@ -15,7 +15,7 @@ let notifier = null;
 // Attachments users sent (photos, PDFs), served read-only from the agent workspace inbox.
 const INBOX_TYPES = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", pdf: "application/pdf", txt: "text/plain; charset=utf-8" };
 
-export async function start({ inbox } = {}) {
+export async function start({ inbox, outputs } = {}) {
   const { DNOTIFIER_APP_ID: appId, DNOTIFIER_SECRET: secret } = process.env;
   if (appId && secret) {
     notifier = new DNotifier({
@@ -50,6 +50,14 @@ export async function start({ inbox } = {}) {
       const type = INBOX_TYPES[file[2]];
       const body = inbox && type ? await readFile(`${inbox}/${file[1]}`).catch(() => null) : null;
       res.writeHead(body ? 200 : 404, { "Content-Type": body ? type : "text/plain", "X-Content-Type-Options": "nosniff" });
+      res.end(body ?? "not found");
+      return;
+    }
+    // Agent-made images, served from the WhatsApp daemon media root (only Hukam's own "hukam-*.png|jpg|webp" copies).
+    const out = req.url.match(/^\/outputs\/(hukam-[A-Za-z0-9_-]+\.(png|jpg|webp))$/);
+    if (out) {
+      const body = outputs ? await readFile(`${outputs}/${out[1]}`).catch(() => null) : null;
+      res.writeHead(body ? 200 : 404, { "Content-Type": body ? INBOX_TYPES[out[2]] : "text/plain", "X-Content-Type-Options": "nosniff" });
       res.end(body ?? "not found");
       return;
     }
