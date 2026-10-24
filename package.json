@@ -8,7 +8,8 @@
     "portal:install": "npm --prefix portal install",
     "portal:build": "npm --prefix portal run build",
     "portal:dev": "npm --prefix portal run dev",
-    "check": "for f in src/*.mjs; do node --check $f || exit 1; done && npm --prefix portal run typecheck"
+    "check": "for f in src/*.mjs; do node --check $f || exit 1; done && npm --prefix portal run typecheck",
+    "playground": "node scripts/serve-playground.mjs"
   },
   "keywords": [],
   "author": "",
