@@ -61,7 +61,9 @@ export async function recent(target, limit = 10, sender) {
     context_after: 0,
     ...(sender ? { sender_phone_number: sender } : {}),
   });
-  return parseMessages(text).sort((a, b) => a.ts.localeCompare(b.ts));
+  // The daemon can repeat a line within one listing; keep each message once.
+  const unique = new Map(parseMessages(text).map((m) => [m.id || `${m.ts}|${m.body}`, m]));
+  return [...unique.values()].sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
 // Groups we belong to: JID -> { name, members: [{ jid, phone, lid }] }. Members are keyed by LID in "lid" groups.

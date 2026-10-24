@@ -557,6 +557,11 @@ async function pollGroup(group) {
   const ids = new Set(theirs.map(keyOf));
   let found = await attribute(group, ids);
   if (found.size < ids.size) {
+    // The daemon may not have linked a brand-new message to the sender's number yet: give it a moment.
+    await new Promise((r) => setTimeout(r, 1500));
+    found = await attribute(group, ids);
+  }
+  if (found.size < ids.size) {
     await refreshGroups(true); // someone new (e.g. just added) is not in the cached member list yet
     found = await attribute(group, ids);
   }
