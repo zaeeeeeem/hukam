@@ -34,6 +34,7 @@ Hukam router  (this repo)
 | `src/gemma.mjs` | Gemma 4 intent routing and result summaries (Gemini API) |
 | `src/superset.mjs` | Spawns, messages, waits on and reads terminal agents via the Superset CLI |
 | `src/whatsapp.mjs` | Client for the WhatsApp MCP daemon |
+| `src/preview.mjs` | Headless Chrome screenshot of the agent's page, sent back to WhatsApp |
 | `src/voice.mjs` | Voice notes: ffmpeg + whisper.cpp, fully local |
 | `src/bus.mjs` | Event stream to the dashboard: DNotifier realtime, local SSE fallback |
 | `public/index.html` | Live dashboard: WhatsApp feed, Gemma decisions, agent cards |
@@ -49,6 +50,7 @@ Hukam router  (this repo)
 | 🖼️ photo / screenshot of a sketch, mockup or bug, captioned "build this" or nothing | Gemma 4 looks at the image, replies "👀 Gemma sees: …", and starts an agent pointed at the saved image (`inbox/<id>.jpg`) |
 | 📄 PDF (spec, menu, brief) + "build a page from this" | Text extracted with `pdftotext`, Gemma plans the task, the agent gets the PDF and its text in `inbox/` |
 | 🖼️/📄 + "what is this?" / "summarize" | Gemma answers in chat, no agent started |
+| *(automatic)* | When an agent changes the page, Hukam screenshots it in headless Chrome and sends the picture: a live preview on your phone |
 | `list` | All sessions and their state |
 | `stop dark-mode-toggle` | Closes that session |
 | `yes k3f9` / `no k3f9` | Approves or cancels a task Gemma flagged as risky |

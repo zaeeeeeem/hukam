@@ -10,6 +10,7 @@ import * as gemma from "./gemma.mjs";
 import * as superset from "./superset.mjs";
 import * as bus from "./bus.mjs";
 import * as voice from "./voice.mjs";
+import * as preview from "./preview.mjs";
 
 const list = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
 const ALLOW = list(process.env.WA_ALLOW);
@@ -107,7 +108,7 @@ function screenTail(screen) {
   return body.slice(-4).join("\n").slice(0, 500) || "Done. Open the dashboard for details.";
 }
 
-async function watch(session, chat) {
+async function watch(session, chat, startedAt = Date.now()) {
   session.status = "working";
   save();
   bus.emit("status", { name: session.name, status: "working" });
@@ -116,7 +117,7 @@ async function watch(session, chat) {
   session.status = state === "timeout" ? "working" : state;
   save();
   bus.emit("status", { name: session.name, status: session.status });
-  if (state === "timeout") return watch(session, chat);
+  if (state === "timeout") return watch(session, chat, startedAt);
   if (state === "exited") return reply(chat, `⛔ *${session.name}* exited.`);
 
   let summary;
@@ -133,6 +134,12 @@ async function watch(session, chat) {
     await reply(chat, `🔐 *${session.name}* needs you:\n${summary}\n\nReply \`@${session.name} <answer>\` or \`stop ${session.name}\`.`);
   } else {
     await reply(chat, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
+    // Show, don't tell: if the agent changed the page, send a screenshot of it.
+    try {
+      if (await preview.send(chat, session.name, startedAt)) bus.emit("preview", { name: session.name });
+    } catch (err) {
+      console.error("[preview]", err.message);
+    }
   }
 }
 
