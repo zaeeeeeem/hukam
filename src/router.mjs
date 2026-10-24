@@ -105,13 +105,22 @@ async function reply(chat, text) {
 
 const chatLabel = (chat) => (wa.isGroup(chat) ? groupInfo.get(chat)?.name || "group" : "DM");
 
+// Group metadata is a WhatsApp server query with a strict rate limit: cache it on disk, never ask more than
+// every 20 s even when forced, and back off for 2 minutes after a 429.
+const GROUPS_FILE = new URL("../.hukam-groups.json", import.meta.url);
+let groupsBackoffUntil = 0;
+if (existsSync(GROUPS_FILE)) for (const [j, g] of JSON.parse(readFileSync(GROUPS_FILE, "utf8"))) groupInfo.set(j, g);
+
 async function refreshGroups(force = false) {
-  if (!GROUPS.length || (!force && Date.now() - groupsAt < 30_000)) return;
-  groupsAt = Date.now();
+  const now = Date.now();
+  if (!GROUPS.length || now < groupsBackoffUntil || now - groupsAt < (force ? 20_000 : 30_000)) return;
+  groupsAt = now;
   try {
     for (const [j, g] of await wa.groups()) if (GROUPS.includes(j)) groupInfo.set(j, g);
+    writeFileSync(GROUPS_FILE, JSON.stringify([...groupInfo]));
   } catch (err) {
-    console.error("[groups]", err.message);
+    if (/429|rate/i.test(err.message)) groupsBackoffUntil = now + 120_000;
+    console.error("[groups]", err.message.slice(0, 120));
   }
 }
 

@@ -3,3 +3,4 @@ node_modules/
 .hukam-state.json
 *.log
 .hukam-chats.json
+.hukam-groups.json
