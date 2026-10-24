@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hukam — live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --bg:#0b0d10; --panel:#13161b; --line:#232830; --text:#e8eaed; --dim:#8a93a0; --wa:#25d366; --gemma:#8ab4f8; --warn:#fbbc04; --bad:#f28b82; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { display:flex; align-items:baseline; gap:16px; padding:20px 28px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:28px; letter-spacing:-.02em; }
+  header p { margin:0; color:var(--dim); }
+  #via { margin-left:auto; font:13px ui-monospace, monospace; padding:4px 10px; border:1px solid var(--line); border-radius:999px; color:var(--dim); }
+  #via.live { color:var(--wa); border-color:var(--wa); }
+  main { display:grid; grid-template-columns: 1fr 1fr 1.2fr; gap:1px; background:var(--line); height:calc(100vh - 73px); }
+  section { background:var(--bg); padding:20px 24px; overflow:auto; }
+  h2 { margin:0 0 14px; font-size:13px; text-transform:uppercase; letter-spacing:.12em; color:var(--dim); }
+  .msg { max-width:92%; padding:10px 14px; border-radius:14px; margin:0 0 10px; white-space:pre-wrap; animation:in .3s ease-out; }
+  .in { background:#1d2a22; border:1px solid #24553a; }
+  .out { background:var(--panel); border:1px solid var(--line); margin-left:auto; }
+  .meta { font-size:12px; color:var(--dim); margin-top:4px; }
+  .intent { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--gemma); border-radius:10px; padding:12px 14px; margin-bottom:12px; animation:in .3s ease-out; }
+  .intent .action { font:600 20px ui-monospace, monospace; color:var(--gemma); }
+  .intent.high { border-left-color:var(--warn); }
+  .intent .risk { float:right; font:12px ui-monospace, monospace; color:var(--dim); }
+  .intent.high .risk { color:var(--warn); }
+  .intent .prompt { margin-top:6px; }
+  .intent .reason { margin-top:4px; color:var(--dim); font-size:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; animation:in .3s ease-out; }
+  .card .top { display:flex; align-items:center; gap:10px; }
+  .card .name { font:600 18px ui-monospace, monospace; }
+  .card .agent { font-size:12px; color:var(--dim); border:1px solid var(--line); padding:1px 8px; border-radius:999px; }
+  .card .status { margin-left:auto; font:13px ui-monospace, monospace; }
+  .card .prompt { color:var(--dim); margin-top:6px; }
+  .card .summary { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); white-space:pre-wrap; }
+  .working .status { color:var(--gemma); }
+  .working .status::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--gemma); margin-right:6px; animation:pulse 1s infinite; }
+  .idle .status { color:var(--wa); }
+  .blocked .status { color:var(--warn); }
+  .exited .status, .stopped .status { color:var(--bad); }
+  .empty { color:var(--dim); }
+  @keyframes in { from { opacity:0; transform:translateY(6px); } }
+  @keyframes pulse { 50% { opacity:.25; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hukam</h1>
+  <p>WhatsApp → Gemma 4 → your agents</p>
+  <span id="via">connecting…</span>
+</header>
+<main>
+  <section><h2>WhatsApp</h2><div id="chat"><p class="empty">Waiting for a message…</p></div></section>
+  <section><h2>Gemma 4 decides</h2><div id="intents"><p class="empty">No decisions yet.</p></div></section>
+  <section><h2>Agents</h2><div id="agents"><p class="empty">No agents running.</p></div></section>
+</main>
+<script type="module">
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const seen = new Set();
+  const agents = new Map();
+
+  function clearEmpty(el) { el.querySelector(".empty")?.remove(); }
+
+  function renderAgent(name) {
+    const a = agents.get(name);
+    let el = document.querySelector(`[data-agent="${CSS.escape(name)}"]`);
+    if (!el) { clearEmpty($("agents")); el = document.createElement("div"); el.dataset.agent = name; $("agents").prepend(el); }
+    el.className = `card ${a.status}`;
+    el.innerHTML = `<div class="top"><span class="name">${esc(name)}</span><span class="agent">${esc(a.agent)}</span><span class="status">${esc(a.status)}</span></div>
+      <div class="prompt">${esc(a.prompt)}</div>${a.summary ? `<div class="summary">${esc(a.summary)}</div>` : ""}`;
+  }
+
+  function onEvent(e) {
+    const key = `${e.at}|${e.type}|${e.name || e.code || e.text || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (e.type === "inbound" || e.type === "reply") {
+      clearEmpty($("chat"));
+      const div = document.createElement("div");
+      div.className = `msg ${e.type === "inbound" ? "in" : "out"}`;
+      const who = e.type === "inbound" ? (e.voice ? "🎙️ voice note · whisper.cpp" : "you") : "Hukam";
+      div.innerHTML = `${esc(e.text)}<div class="meta">${who} · ${time(e.at)}</div>`;
+      $("chat").append(div);
+      div.scrollIntoView({ behavior: "smooth", block: "end" });
+    } else if (e.type === "intent" || e.type === "gate") {
+      clearEmpty($("intents"));
+      const i = e.intent || { action: "approval gate", risk: "high", prompt: e.prompt, reason: e.reason };
+      const div = document.createElement("div");
+      div.className = `intent ${i.risk === "high" ? "high" : ""}`;
+      div.innerHTML = `<span class="risk">risk: ${esc(i.risk || "low")}${e.code ? ` · code ${esc(e.code)}` : ""}</span>
+        <div class="action">${esc(i.action)}${i.agent ? ` → ${esc(i.agent)}` : ""}${i.session ? ` → @${esc(i.session)}` : ""}</div>
+        ${i.prompt ? `<div class="prompt">${esc(i.prompt)}</div>` : ""}<div class="reason">${esc(i.reason || "")} <span class="meta">${esc(e.model || "")}</span></div>`;
+      $("intents").prepend(div);
+    } else if (e.type === "spawn") {
+      agents.set(e.name, { agent: e.agent, prompt: e.prompt, status: "working" });
+      renderAgent(e.name);
+    } else if (e.type === "status" && agents.has(e.name)) {
+      agents.get(e.name).status = e.status;
+      renderAgent(e.name);
+    } else if (e.type === "done" && agents.has(e.name)) {
+      Object.assign(agents.get(e.name), { status: e.state, summary: e.summary });
+      renderAgent(e.name);
+    }
+  }
+
+  // History and fallback over local SSE; live events over DNotifier when configured.
+  new EventSource("/events").onmessage = (m) => onEvent(JSON.parse(m.data));
+  const cfg = await fetch("/config").then((r) => r.json());
+  if (cfg.appId) {
+    try {
+      const { DNotifier } = await import("https://esm.sh/@dnotifier-realtime/dnotifier@1.1.25");
+      const n = new DNotifier({
+        appId: cfg.appId, secret: cfg.secret, transport: "ws", userId: cfg.userId,
+        onConnected: () => { $("via").textContent = "● live via DNotifier"; $("via").className = "live"; },
+        onDisconnected: () => { $("via").textContent = "local stream"; $("via").className = ""; },
+        onMessage: (msg) => {
+          const data = msg?.payload?.toJSON?.() ?? msg?.payload ?? msg;
+          const event = data?.event ?? data?.data?.event;
+          if (event) onEvent(event);
+        },
+      });
+      await n.connect();
+    } catch (err) {
+      console.error("DNotifier", err);
+      $("via").textContent = "local stream";
+    }
+  } else {
+    $("via").textContent = "local stream";
+  }
+</script>
+</body>
+</html>

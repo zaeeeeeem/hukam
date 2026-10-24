@@ -1,0 +1,18 @@
+{
+  "name": "hukam",
+  "version": "1.0.0",
+  "description": "Command your coding agents from WhatsApp. Gemma 4 routes, Superset runs, DNotifier streams.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node --env-file-if-exists=.env src/router.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@dnotifier-realtime/dnotifier": "^1.1.25",
+    "ws": "^8.22.0"
+  }
+}

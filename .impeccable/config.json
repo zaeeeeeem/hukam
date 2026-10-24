@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "public/index.html"
+        ],
+        "createdAt": "2026-10-24T09:01:25.825Z",
+        "reason": "assistant decided: dot only renders on agent cards in 'working' state, tied to a live Superset agent run; stops when agent settles"
+      }
+    ]
+  }
+}
