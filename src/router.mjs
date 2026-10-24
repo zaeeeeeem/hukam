@@ -1,11 +1,11 @@
 // Hukam: command your coding agents from WhatsApp.
 // WhatsApp message -> Gemma 4 decides the action -> Superset runs the agent -> result back on WhatsApp.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, statSync, readdirSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import * as wa from "./whatsapp.mjs";
 import * as gemma from "./gemma.mjs";
 import * as superset from "./superset.mjs";
@@ -189,6 +189,20 @@ function screenTail(screen) {
   return body.slice(-4).join("\n").slice(0, 500) || "Done. Open the dashboard for details.";
 }
 
+// Newest outputs/*.md written during this run (research answers), or null.
+function latestAnswer(since) {
+  try {
+    const dir = join(WORKDIR, "outputs");
+    const files = readdirSync(dir).filter((f) => /\.md$/i.test(f)).map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs })).filter((x) => x.t >= since);
+    if (!files.length) return null;
+    files.sort((a, b) => b.t - a.t);
+    const text = readFileSync(join(dir, files[0].f), "utf8").trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
 async function watch(session, chat, startedAt = Date.now()) {
   setStatus(session, "working");
   const state = await superset.waitSettled(session.terminal);
@@ -214,7 +228,15 @@ async function watch(session, chat, startedAt = Date.now()) {
   if (state === "blocked") {
     await reply(chat, `🔐 *${session.name}* needs you:\n${summary}\n\nReply \`@${session.name} <answer>\` or \`stop ${session.name}\`.`);
   } else {
-    await reply(chat, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
+    // Research-style tasks write their answer to outputs/*.md: send the answer itself, not a description of it.
+    const answer = latestAnswer(startedAt);
+    if (answer) {
+      const chunks = answer.match(/[\s\S]{1,3500}(?=\n|$)|[\s\S]{1,3500}/g) || [answer];
+      for (const [i, part] of chunks.entries()) await reply(chat, i === 0 ? `✅ *${session.name}*:\n\n${part.trim()}` : part.trim());
+      await reply(chat, `Follow up with \`@${session.name} <message>\`.`);
+    } else {
+      await reply(chat, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
+    }
     // Images the agent created go back to the chat that started the session.
     const target = session.owner || chat;
     if (cfg().artifacts.enabled) {
