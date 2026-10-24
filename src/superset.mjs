@@ -14,8 +14,8 @@ async function superset(args, timeoutMs = 60_000) {
   return JSON.parse(stdout);
 }
 
-export async function spawn(agent, prompt) {
-  const model = process.env[`HUKAM_${agent.toUpperCase()}_MODEL`];
+// model: from the owner's settings; falls back to HUKAM_<AGENT>_MODEL in .env.
+export async function spawn(agent, prompt, model = process.env[`HUKAM_${agent.toUpperCase()}_MODEL`]) {
   const out = await superset(["agents", "create", "--agent", agent, "--prompt", prompt, ...(model ? ["--model", model] : [])]);
   if (out.kind !== "terminal") throw new Error(`expected terminal agent, got ${out.kind}`);
   return out.sessionId;
@@ -44,3 +44,9 @@ export async function waitSettled(terminal, timeoutSec = 1800) {
 }
 
 export const close = (terminal) => superset(["terminals", "close", "--terminal", terminal]);
+
+// For the System page: is the CLI installed, and which version.
+export async function version() {
+  const { stdout } = await run("superset", ["--version"], { timeout: 10_000 });
+  return stdout.trim();
+}

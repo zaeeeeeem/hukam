@@ -13,36 +13,57 @@ import * as bus from "./bus.mjs";
 import * as voice from "./voice.mjs";
 import * as preview from "./preview.mjs";
 import * as artifacts from "./artifacts.mjs";
+import * as settings from "./settings.mjs";
+import { createApi } from "./api.mjs";
 
-const list = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
-const ALLOW = list(process.env.WA_ALLOW);
-// Groups where any member may command Hukam. Approvals and stop stay owner-only.
-const GROUPS = list(process.env.WA_GROUPS);
-const OWNER = process.env.WA_OWNER || "923124487312";
-const OWNER_LID = (process.env.WA_OWNER_LID || "237077966905376@lid").split("@")[0];
-const POLL_MS = Number(process.env.WA_POLL_MS || 2000);
+// Owner settings (portal-editable, .hukam-settings.json over .env), read on every use so changes apply live.
+// allow: 1:1 numbers. groups: group JIDs where any member may command Hukam; approvals and stop stay owner-only.
+const cfg = () => settings.get();
 const STATE_FILE = new URL("../.hukam-state.json", import.meta.url);
 // Per-chat memory: recent images (user photos and agent artifacts) and a pending "I'll send the image next" instruction.
 const CHATS_FILE = new URL("../.hukam-chats.json", import.meta.url);
 const AWAIT_MS = 10 * 60_000;
-const AGENTS = new Set(["claude", "codex", "opencode"]);
+const AGENTS = new Set(settings.AGENTS);
+const APPROVALS_FILE = new URL("../.hukam-approvals.json", import.meta.url);
 // Photos and PDFs are copied into the agent workspace (the playground) so agents can open them.
 const WORKDIR = process.env.HUKAM_WORKSPACE_DIR || fileURLToPath(new URL("../../demo/playground", import.meta.url));
 const INBOX = `${WORKDIR}/inbox`;
-const MAX_ATTACHMENT = 8 * 1024 * 1024;
-const ACKS = ["👀", "🫡", "⚡", "🔥", "🚀", "🧠", "🛠️", "👍", "✨", "🤝"];
 
-if (!ALLOW.length && !GROUPS.length) throw new Error("WA_ALLOW and WA_GROUPS are empty: set at least one allowed phone number or group");
+if (!cfg().allow.length && !cfg().groups.length) throw new Error("WA_ALLOW and WA_GROUPS are empty: set at least one allowed phone number or group");
 if (!process.env.HUKAM_WORKSPACE) throw new Error("HUKAM_WORKSPACE is not set");
 
-// name -> { name, agent, terminal, prompt, status, owner } (owner = chat that started it: phone or group JID)
+// name -> { name, agent, terminal, prompt, status, owner, createdAt, updatedAt, from, summary, artifacts, previews }
+// (owner = chat that started it: phone or group JID)
 const sessions = new Map(existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, "utf8")) : []);
-const pending = new Map(); // approval code -> { intent, chat, sender }
+// Risky tasks waiting for the owner (code -> { code, intent, chat, sender, at }) and the decisions already made.
+// Persisted, so a restart no longer drops a pending approval.
+let approvals = { pending: [], history: [] };
+try {
+  if (existsSync(APPROVALS_FILE)) approvals = { ...approvals, ...JSON.parse(readFileSync(APPROVALS_FILE, "utf8")) };
+} catch (err) {
+  console.error("[approvals]", err.message);
+}
+const pending = new Map(approvals.pending.map((p) => [p.code, p]));
+const decisions = approvals.history;
+const saveApprovals = () => {
+  try {
+    writeFileSync(APPROVALS_FILE, JSON.stringify({ pending: [...pending.values()], history: decisions.slice(0, 100) }, null, 2));
+  } catch (err) {
+    console.error("[approvals]", err.message);
+  }
+};
 const groupInfo = new Map(); // group JID -> { name, members: [{ jid, phone, lid }] }
 let groupsAt = 0;
 const seen = new Set();
 
 const save = () => writeFileSync(STATE_FILE, JSON.stringify([...sessions], null, 2));
+// Status change: stamp it, persist it, tell the portal.
+function setStatus(s, status) {
+  s.status = status;
+  s.updatedAt = Date.now();
+  save();
+  bus.emit("status", { name: s.name, status, chatId: s.owner });
+}
 
 let chatMem = new Map();
 try {
@@ -99,7 +120,7 @@ function uniqueName(base) {
 
 // `chat` is where we answer: a 1:1 phone number or a group JID.
 async function reply(chat, text) {
-  bus.emit("reply", { text, chat: chatLabel(chat) });
+  bus.emit("reply", { text, chat: chatLabel(chat), chatId: chat });
   await wa.send(chat, text);
 }
 
@@ -113,6 +134,7 @@ if (existsSync(GROUPS_FILE)) for (const [j, g] of JSON.parse(readFileSync(GROUPS
 
 async function refreshGroups(force = false) {
   const now = Date.now();
+  const GROUPS = cfg().groups;
   if (!GROUPS.length || now < groupsBackoffUntil || now - groupsAt < (force ? 20_000 : 30_000)) return;
   groupsAt = now;
   try {
@@ -125,7 +147,7 @@ async function refreshGroups(force = false) {
 }
 
 // The owner may show up as a phone number or (in "lid" groups) as a LID; both resolve through the member list.
-const isOwner = (sender) => sender.phone === OWNER || (!!sender.lid && sender.lid === OWNER_LID);
+const isOwner = (sender) => sender.phone === cfg().owner || (!!sender.lid && sender.lid === cfg().ownerLid);
 
 // Commands that never need the model: approvals, list, help, and "@name message".
 function fastPath(text) {
@@ -168,19 +190,16 @@ function screenTail(screen) {
 }
 
 async function watch(session, chat, startedAt = Date.now()) {
-  session.status = "working";
-  save();
-  bus.emit("status", { name: session.name, status: "working" });
+  setStatus(session, "working");
   const state = await superset.waitSettled(session.terminal);
   if (session.status === "stopped") return;
-  session.status = state === "timeout" ? "working" : state;
-  save();
-  bus.emit("status", { name: session.name, status: session.status });
+  setStatus(session, state === "timeout" ? "working" : state);
   if (state === "timeout") return watch(session, chat, startedAt);
   if (state === "exited") return reply(chat, `⛔ *${session.name}* exited.`);
 
   let summary;
   let screen = "";
+  const summarizeStarted = Date.now();
   try {
     screen = await superset.read(session.terminal);
     summary = await gemma.summarize(session.name, screen);
@@ -188,30 +207,75 @@ async function watch(session, chat, startedAt = Date.now()) {
     console.error("[summarize]", err.message);
     summary = screenTail(screen);
   }
-  bus.emit("done", { name: session.name, state, summary });
+  session.summary = summary;
+  session.finishedAt = Date.now();
+  save();
+  bus.emit("done", { name: session.name, state, summary, chatId: session.owner, model: gemma.served()?.key, ms: Date.now() - summarizeStarted });
   if (state === "blocked") {
     await reply(chat, `🔐 *${session.name}* needs you:\n${summary}\n\nReply \`@${session.name} <answer>\` or \`stop ${session.name}\`.`);
   } else {
     await reply(chat, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
     // Images the agent created go back to the chat that started the session.
     const target = session.owner || chat;
-    try {
-      for (const a of await artifacts.send(target, session.name, startedAt, WORKDIR)) {
-        rememberImage(target, { path: a.rel, source: "agent", session: session.name });
-        const file = basename(a.media);
-        bus.emit("reply", { text: `🎨 ${session.name}: ${a.rel}`, chat: chatLabel(target), attachment: { kind: "image", url: `/outputs/${file}`, name: file } });
-        bus.emit("artifact", { name: session.name, path: a.rel });
+    if (cfg().artifacts.enabled) {
+      try {
+        for (const a of await artifacts.send(target, session.name, startedAt, WORKDIR)) {
+          rememberImage(target, { path: a.rel, source: "agent", session: session.name });
+          const file = basename(a.media);
+          session.artifacts = [{ path: a.rel, url: `/outputs/${file}`, at: Date.now() }, ...(session.artifacts || [])].slice(0, 12);
+          save();
+          bus.emit("reply", { text: `🎨 ${session.name}: ${a.rel}`, chat: chatLabel(target), chatId: target, attachment: { kind: "image", url: `/outputs/${file}`, name: file } });
+          bus.emit("artifact", { name: session.name, path: a.rel, url: `/outputs/${file}`, chatId: target });
+        }
+      } catch (err) {
+        console.error("[artifacts]", err.message);
       }
-    } catch (err) {
-      console.error("[artifacts]", err.message);
     }
     // Show, don't tell: if the agent changed the page, send a screenshot of it.
-    try {
-      if (await preview.send(chat, session.name, startedAt)) bus.emit("preview", { name: session.name });
-    } catch (err) {
-      console.error("[preview]", err.message);
+    if (cfg().preview.enabled) {
+      try {
+        const shot = await preview.send(chat, session.name, startedAt);
+        if (shot) {
+          const url = `/outputs/${basename(shot)}`;
+          session.previews = [{ url, at: Date.now() }, ...(session.previews || [])].slice(0, 12);
+          save();
+          bus.emit("preview", { name: session.name, url, chatId: chat });
+        }
+      } catch (err) {
+        console.error("[preview]", err.message);
+      }
     }
   }
+}
+
+// The owner's yes/no on a risky task, from WhatsApp ("yes k3f9") or the portal.
+async function decide(code, ok, via = "whatsapp") {
+  const p = pending.get(code);
+  if (!p) return null;
+  pending.delete(code);
+  decisions.unshift({ code, ok, via, at: Date.now(), askedAt: p.at, prompt: p.intent.prompt, reason: p.intent.reason, category: p.intent.category || null,
+    chatId: p.chat, chat: chatLabel(p.chat), from: p.sender?.name || null });
+  saveApprovals();
+  bus.emit("approval", { code, ok, via, prompt: p.intent.prompt, chatId: p.chat });
+  if (!ok) {
+    await reply(p.chat, "❌ Cancelled.");
+    return p;
+  }
+  execute(p.intent, p.chat, p.sender).catch((err) => {
+    console.error("[approval]", err.message);
+    bus.emit("error", { message: err.message, chatId: p.chat });
+    wa.send(p.chat, `⚠️ ${err.message}`).catch(() => {});
+  });
+  return p;
+}
+
+async function stopSession(s, chat) {
+  s.status = "stopped";
+  s.updatedAt = Date.now();
+  save();
+  await superset.close(s.terminal).catch(() => {});
+  bus.emit("status", { name: s.name, status: "stopped", chatId: s.owner });
+  return reply(chat, `⏹️ Stopped *${s.name}*.`);
 }
 
 async function execute(intent, chat, sender = {}) {
@@ -226,36 +290,36 @@ async function execute(intent, chat, sender = {}) {
     case "await_attachment": {
       memOf(chat).awaiting = { prompt: intent.prompt || "Build what this shows.", at: Date.now() };
       saveChats();
+      bus.emit("awaiting", { prompt: memOf(chat).awaiting.prompt, chatId: chat });
       return reply(chat, "📎 Send the image when ready.");
     }
     case "stop": {
       const s = sessions.get(intent.session);
       if (!s) return reply(chat, `No session named ${intent.session}.\n\n${listText()}`);
-      s.status = "stopped";
-      save();
-      await superset.close(s.terminal).catch(() => {});
-      bus.emit("status", { name: s.name, status: "stopped" });
-      return reply(chat, `⏹️ Stopped *${s.name}*.`);
+      return stopSession(s, chat);
     }
     case "send": {
       const s = sessions.get(intent.session);
       if (!s) return reply(chat, `No session named ${intent.session}.\n\n${listText()}`);
       await superset.sendText(s.terminal, intent.prompt);
       await superset.sendKeys(s.terminal, "enter").catch(() => {});
-      bus.emit("send", { name: s.name, prompt: intent.prompt });
+      s.followUps = [{ prompt: intent.prompt, at: Date.now(), from: sender.name || null }, ...(s.followUps || [])].slice(0, 20);
+      bus.emit("send", { name: s.name, prompt: intent.prompt, chatId: chat });
       await reply(chat, `➡️ Sent to *${s.name}*.`);
       return watch(s, chat);
     }
     case "spawn": {
-      const agent = AGENTS.has(intent.agent) ? intent.agent : "claude";
+      const agent = AGENTS.has(intent.agent) ? intent.agent : cfg().defaultAgent;
       const name = uniqueName(intent.name || intent.prompt?.split(/\s+/).slice(0, 3).join("-"));
       const terminal = await superset.spawn(agent, `${intent.prompt}
 
-(Sent from WhatsApp through Hukam. Work only inside this workspace. Do not git push, deploy, or delete anything outside it. Save any images or other visual files you create under outputs/ in this workspace. Never read, print or send .env files, keys, tokens or other secrets. Finish with a two-line summary of what you changed.)`);
-      const s = { name, agent, terminal, prompt: intent.prompt, status: "working", owner: chat };
+(Sent from WhatsApp through Hukam. Work only inside this workspace. Do not git push, deploy, or delete anything outside it. Save any images or other visual files you create under outputs/ in this workspace. Never read, print or send .env files, keys, tokens or other secrets. Finish with a two-line summary of what you changed.)`, cfg().models[agent]);
+      const now = Date.now();
+      const s = { name, agent, terminal, prompt: intent.prompt, status: "working", owner: chat, createdAt: now, updatedAt: now,
+        from: sender.name || (isOwner(sender) ? "Owner" : null), model: cfg().models[agent] || null };
       sessions.set(name, s);
       save();
-      bus.emit("spawn", { name, agent, prompt: intent.prompt });
+      bus.emit("spawn", { name, agent, prompt: intent.prompt, chatId: chat, chat: chatLabel(chat) });
       const hi = wa.isGroup(chat) && sender.name ? `${sender.name}, started` : "Started";
       await reply(chat, `🚀 ${hi} *${name}* on ${agent}.\nI'll message ${wa.isGroup(chat) ? "here" : "you"} when it's done.`);
       return watch(s, chat);
@@ -288,8 +352,9 @@ async function saveAttachment(chat, msg) {
     return null;
   }
   const size = statSync(src).size;
-  if (size > MAX_ATTACHMENT) {
-    await reply(chat, `That file is ${(size / 1048576).toFixed(1)} MB. I can read photos and PDFs up to 8 MB.`);
+  const maxMb = cfg().attachments.maxMb;
+  if (size > maxMb * 1024 * 1024) {
+    await reply(chat, `That file is ${(size / 1048576).toFixed(1)} MB. I can read photos and PDFs up to ${maxMb} MB.`);
     return null;
   }
   const type = sniff(src);
@@ -319,18 +384,22 @@ function attachmentFallback(caption, att) {
 }
 
 // sender: { jid, phone, lid, name } of whoever wrote msg. jid is only needed (and set) in groups.
+// msg.source === "portal": typed by the owner in the portal. Same path, minus the WhatsApp read receipt/reaction.
 async function handle(chat, msg, sender = { phone: chat }) {
   const owner = isOwner(sender);
+  const portal = msg.source === "portal";
   let attachment = null;
   if (msg.media === "audio") {
+    if (!cfg().voice.enabled) return reply(chat, "🎙️ Voice notes are turned off right now. Please type the message.");
     wa.markRead(chat, msg.id, sender.jid);
     wa.react(chat, msg.id, "🎙️", sender.jid);
     const started = Date.now();
     msg.body = await voice.transcribe(await wa.downloadMedia(chat, msg.id));
-    bus.emit("voice", { text: msg.body, ms: Date.now() - started });
+    bus.emit("voice", { text: msg.body, ms: Date.now() - started, chatId: chat, chat: chatLabel(chat), from: sender.name || null });
     if (!msg.body) return reply(chat, "🎙️ Couldn't hear anything in that voice note.");
     await wa.send(chat, `🎙️ _${msg.body}_`);
   } else if (["image", "document"].includes(msg.media) && msg.id) {
+    if (!cfg().attachments.enabled) return reply(chat, "Photos and PDFs are turned off right now. Please describe the task in text.");
     wa.markRead(chat, msg.id, sender.jid);
     wa.react(chat, msg.id, msg.media === "image" ? "🖼️" : "📄", sender.jid);
     attachment = await saveAttachment(chat, msg);
@@ -345,69 +414,87 @@ async function handle(chat, msg, sender = { phone: chat }) {
   bus.emit("inbound", {
     from: sender.name || (sender.phone || sender.lid || "?").slice(-4),
     chat: chatLabel(chat),
+    chatId: chat,
     owner,
     text: msg.body,
     voice: msg.media === "audio",
+    ...(portal && { source: "portal" }),
+    ...(sender.phone && { phone: sender.phone }),
     ...(attachment && { attachment: { kind: attachment.kind, url: attachment.url, name: attachment.file, size: attachment.size } }),
   });
   // Instant acknowledgement: blue ticks plus a random emoji reaction (or a short text if the message has no ID).
-  wa.markRead(chat, msg.id, sender.jid);
-  const ack = ACKS[Math.floor(Math.random() * ACKS.length)];
-  if (msg.id && !attachment) wa.react(chat, msg.id, ack, sender.jid);
-  else wa.send(chat, `${ack} on it`).catch(() => {});
-  wa.typing(chat, true);
+  // A portal command has no WhatsApp message to tick, and the owner is looking at the portal: no ack text.
+  if (!portal) {
+    wa.markRead(chat, msg.id, sender.jid);
+    const acks = cfg().acks;
+    const ack = acks[Math.floor(Math.random() * acks.length)];
+    if (msg.id && !attachment) wa.react(chat, msg.id, ack, sender.jid);
+    else wa.send(chat, `${ack} on it`).catch(() => {});
+    wa.typing(chat, true);
+  }
 
   let intent = attachment ? null : fastPath(msg.body);
   if (intent?.action === "approval") {
     if (!owner) return reply(chat, "🔒 Only the owner can approve or cancel risky tasks.");
-    const p = pending.get(intent.code);
-    if (!p) return reply(chat, `No pending approval with code ${intent.code}.`);
-    pending.delete(intent.code);
-    bus.emit("approval", { code: intent.code, ok: intent.ok, prompt: p.intent.prompt });
-    if (!intent.ok) return reply(p.chat, "❌ Cancelled.");
-    wa.react(chat, msg.id, "✅", sender.jid);
-    return execute(p.intent, p.chat, p.sender);
+    if (!pending.has(intent.code)) return reply(chat, `No pending approval with code ${intent.code}.`);
+    if (intent.ok && msg.id) wa.react(chat, msg.id, "✅", sender.jid);
+    await decide(intent.code, intent.ok, portal ? "portal" : "whatsapp");
+    return;
   }
 
+  const routeStarted = Date.now();
   if (attachment) {
     try {
       intent = await gemma.routeWithAttachment(msg.body, [...sessions.values()], attachment, imageContext(chat));
-      bus.emit("intent", { model: gemma.model, intent, attachment: attachment.url });
+      bus.emit("intent", { model: gemma.served()?.key || gemma.chain(), ms: Date.now() - routeStarted, intent, attachment: attachment.url, chatId: chat });
       if (intent.description) await reply(chat, `👀 Gemma sees: ${intent.description}`);
     } catch (err) {
       console.error("[gemma attachment]", err.message);
       intent = attachmentFallback(msg.body, attachment);
-      bus.emit("intent", { model: "attachment-fallback", intent });
+      bus.emit("intent", { model: "attachment-fallback", ms: Date.now() - routeStarted, intent, chatId: chat });
     }
   } else if (!intent) {
     try {
       intent = await gemma.route(msg.body, [...sessions.values()], imageContext(chat));
-      bus.emit("intent", { model: gemma.model, intent });
+      bus.emit("intent", { model: gemma.served()?.key || gemma.chain(), ms: Date.now() - routeStarted, intent, chatId: chat });
     } catch (err) {
       console.error("[gemma]", err.message);
       intent = fallbackRoute(msg.body);
-      bus.emit("intent", { model: "regex-fallback", intent });
+      bus.emit("intent", { model: "regex-fallback", ms: Date.now() - routeStarted, intent, chatId: chat });
     }
+  } else {
+    bus.emit("intent", { model: "fast-path", ms: 0, intent, chatId: chat });
   }
 
   if (intent.action === "stop" && !owner) return reply(chat, "🔒 Only the owner can stop agents.");
 
-  if (intent.risk === "high" && ["spawn", "send"].includes(intent.action)) {
+  if (intent.risk === "high" && ["spawn", "send"].includes(intent.action) && gated(intent)) {
     const c = code();
-    pending.set(c, { intent, chat, sender });
-    bus.emit("gate", { code: c, reason: intent.reason, prompt: intent.prompt });
+    pending.set(c, { code: c, intent, chat, sender, at: Date.now(), chatLabel: chatLabel(chat) });
+    saveApprovals();
+    bus.emit("gate", { code: c, reason: intent.reason, prompt: intent.prompt, category: intent.category || null, chatId: chat, chat: chatLabel(chat), from: sender.name || null });
     const ask = owner ? `Reply \`yes ${c}\` to run or \`no ${c}\` to cancel.` : `The owner must approve: \`yes ${c}\` to run or \`no ${c}\` to cancel.`;
     return reply(chat, `⚠️ Gemma flagged this as risky: ${intent.reason}\n\n"${intent.prompt}"\n\n${ask}`);
   }
   return execute(intent, chat, sender);
 }
 
+// Risk gate: on unless the owner turned it off. A category the owner allowed through skips the gate;
+// an unknown or missing category is always gated.
+function gated(intent) {
+  const { gate, categories } = cfg().risk;
+  if (!gate) return false;
+  return categories[intent.category] !== false;
+}
+
 let polling = false;
+const pollStats = { lastOkAt: null, lastErrorAt: null, lastError: null, polls: 0 };
 async function poll() {
   if (polling) return;
   polling = true;
   try {
     await pollOnce();
+    pollStats.polls++;
   } finally {
     polling = false;
   }
@@ -415,12 +502,17 @@ async function poll() {
 
 const keyOf = (m) => m.id || `${m.ts}|${m.body}`;
 
+let traceSeq = 0;
 function dispatch(chat, m, sender) {
-  handle(chat, m, sender).catch(async (err) => {
-    console.error("[handle]", err);
-    bus.emit("error", { message: err.message });
-    await wa.send(chat, `⚠️ ${err.message}`).catch(() => {});
-  });
+  const trace = `t${Date.now().toString(36)}${(++traceSeq).toString(36)}`;
+  bus.withTrace(trace, () =>
+    handle(chat, m, sender).catch(async (err) => {
+      console.error("[handle]", err);
+      bus.emit("error", { message: err.message, chatId: chat });
+      await wa.send(chat, `⚠️ ${err.message}`).catch(() => {});
+    }),
+  );
+  return trace;
 }
 
 // The daemon's text lines show a sender's display name, not their JID. To react / mark read in a group we need the
@@ -456,13 +548,23 @@ async function pollGroup(group) {
   }
 }
 
+// A chat added in settings while running: mark its existing history as seen first, so nothing old is replayed.
+const seeded = new Set();
+async function seed(chat) {
+  for (const m of await wa.recent(chat, 30)) seen.add(keyOf(m));
+  seeded.add(chat);
+}
+
 async function pollOnce() {
-  for (const phone of ALLOW) {
+  let failed = null;
+  for (const phone of cfg().allow) {
     let messages;
     try {
+      if (!seeded.has(phone)) await seed(phone);
       messages = await wa.recent(phone);
     } catch (err) {
       console.error("[poll]", err.message);
+      failed = err;
       continue;
     }
     for (const m of messages) {
@@ -474,26 +576,61 @@ async function pollOnce() {
     }
   }
   await refreshGroups();
-  for (const group of GROUPS) {
+  for (const group of cfg().groups) {
     try {
+      if (!seeded.has(group)) await seed(group);
       await pollGroup(group);
     } catch (err) {
       console.error("[poll group]", err.message);
+      failed = err;
     }
   }
+  if (failed) Object.assign(pollStats, { lastErrorAt: Date.now(), lastError: failed.message.slice(0, 200) });
+  else pollStats.lastOkAt = Date.now();
 }
 
+// Portal controller: what the JSON API (src/api.mjs) may read and do. Everything runs through the same paths
+// WhatsApp messages take.
+const controller = {
+  sessions,
+  pending,
+  decisions,
+  chatMem,
+  groupInfo,
+  pollStats,
+  workdir: WORKDIR,
+  inbox: INBOX,
+  chatLabel,
+  // Owner command typed in the portal. Replies go to `chat` (default: the owner's DM).
+  command(text, chat = cfg().owner) {
+    return dispatch(chat, { id: null, body: text, media: null, source: "portal" }, { phone: cfg().owner, lid: cfg().ownerLid, name: null });
+  },
+  followUp(s, text) {
+    const trace = `t${Date.now().toString(36)}${(++traceSeq).toString(36)}`;
+    bus.withTrace(trace, () =>
+      execute({ action: "send", session: s.name, prompt: text }, s.owner || cfg().owner, { name: "Owner (portal)" }).catch((err) => {
+        console.error("[follow-up]", err.message);
+        bus.emit("error", { message: err.message, chatId: s.owner });
+      }),
+    );
+    return trace;
+  },
+  stop: (s) => stopSession(s, s.owner || cfg().owner),
+  decide: (code, ok) => decide(code, ok, "portal"),
+};
+
 // Seed: never replay history from before startup.
-for (const chat of [...ALLOW, ...GROUPS]) {
-  for (const m of await wa.recent(chat, 30)) seen.add(keyOf(m));
-}
+for (const chat of [...cfg().allow, ...cfg().groups]) await seed(chat);
 await refreshGroups(true);
-await bus.start({ inbox: INBOX, outputs: artifacts.MEDIA_ROOT });
+await bus.start({ inbox: INBOX, outputs: artifacts.MEDIA_ROOT, workdir: WORKDIR, api: createApi(controller) });
 for (const s of sessions.values()) if (s.status === "working") watch(s, s.owner);
 bus.emit("ready", {
-  allow: ALLOW.map((p) => `…${p.slice(-4)}`),
-  groups: GROUPS.map((g) => `${groupInfo.get(g)?.name || "?"} (${groupInfo.get(g)?.members.length ?? 0} members)`),
-  model: gemma.model,
+  allow: cfg().allow.map((p) => `…${p.slice(-4)}`),
+  groups: cfg().groups.map((g) => `${groupInfo.get(g)?.name || "?"} (${groupInfo.get(g)?.members.length ?? 0} members)`),
+  model: gemma.chain(),
 });
-console.log(`Hukam listening for ${ALLOW.length} number(s) and ${GROUPS.length} group(s), polling every ${POLL_MS} ms`);
-setInterval(poll, POLL_MS);
+console.log(`Hukam listening for ${cfg().allow.length} number(s) and ${cfg().groups.length} group(s), polling every ${cfg().pollMs} ms`);
+// Re-read the interval each tick: the owner can change it from the portal.
+(function loop() {
+  setTimeout(() => poll().catch((err) => console.error("[poll]", err.message)).finally(loop), cfg().pollMs);
+})();

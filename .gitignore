@@ -1,6 +1,7 @@
 node_modules/
 .env
-.hukam-state.json
 *.log
-.hukam-chats.json
-.hukam-groups.json
+.hukam-*.json
+.hukam-*.json.tmp
+.hukam-events.jsonl
+portal/node_modules/

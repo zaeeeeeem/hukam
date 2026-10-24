@@ -3,18 +3,40 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import * as settings from "./settings.mjs";
 
-const MODEL = process.env.GEMMA_MODEL || "gemma-4-26b-a4b-it";
 const VERTEX_PROJECT = process.env.VERTEX_PROJECT;
-const FALLBACK_MODEL = process.env.GEMMA_FALLBACK_MODEL || "gemma-4-31b-it";
 
-// Tried in order. Shared managed quotas return 429 under load, so each backend gets retries before the next.
-const BACKENDS = [
-  ...(process.env.GEMINI_API_KEY ? [{ via: "gemini-api", model: MODEL }, { via: "gemini-api", model: FALLBACK_MODEL }] : []),
-  ...(VERTEX_PROJECT ? [{ via: "vertex", model: MODEL }] : []),
-];
+// Tried in order (owner-configurable). Shared managed quotas return 429 under load, so each backend gets retries
+// before the next. A backend without credentials is skipped.
+function backends() {
+  const { backends: order, model, fallbackModel } = settings.get().gemma;
+  return order.flatMap((via) => {
+    if (via === "gemini-api" && process.env.GEMINI_API_KEY) return [{ via, model }, ...(fallbackModel && fallbackModel !== model ? [{ via, model: fallbackModel }] : [])];
+    if (via === "vertex" && VERTEX_PROJECT) return [{ via, model }];
+    return [];
+  });
+}
 
-export const model = BACKENDS.map((b) => `${b.via}:${b.model}`).join(" > ") || "none";
+// Human-readable chain, e.g. "gemini-api:gemma-4-26b-a4b-it > vertex:gemma-4-26b-a4b-it". Read live: settings may change.
+export const chain = () => backends().map((b) => `${b.via}:${b.model}`).join(" > ") || "none";
+
+// Per-backend telemetry for the portal's System page. Keyed "via:model".
+const stats = new Map();
+let lastServed = null;
+const statOf = (b) => {
+  const key = `${b.via}:${b.model}`;
+  if (!stats.has(key)) stats.set(key, { key, via: b.via, model: b.model, calls: 0, failures: 0, lastMs: null, lastOkAt: null, lastError: null, lastErrorAt: null });
+  return stats.get(key);
+};
+export const telemetry = () => ({
+  chain: chain(),
+  lastServed,
+  backends: backends().map((b) => statOf(b)),
+  configured: { gemini: !!process.env.GEMINI_API_KEY, vertex: !!VERTEX_PROJECT },
+});
+// Which backend answered the most recent call, e.g. "gemini-api:gemma-4-26b-a4b-it" (with its latency).
+export const served = () => lastServed;
 
 let token = { value: null, expires: 0 };
 async function gcloudToken() {
@@ -57,17 +79,29 @@ async function generateVertex(prompt, maxTokens, model, image) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function generate(prompt, maxOutputTokens = 600, image = null) {
-  if (!BACKENDS.length) throw new Error("set GEMINI_API_KEY or VERTEX_PROJECT");
+  const list = backends();
+  if (!list.length) throw new Error("set GEMINI_API_KEY or VERTEX_PROJECT");
   let lastError;
-  for (const b of BACKENDS) {
+  for (const b of list) {
+    const st = statOf(b);
     for (const delay of [0, 700]) {
       await sleep(delay);
+      const started = Date.now();
+      st.calls++;
       try {
-        return b.via === "vertex"
+        const text = b.via === "vertex"
           ? await generateVertex(prompt, maxOutputTokens, b.model, image)
           : await generateApi(prompt, maxOutputTokens, b.model, image);
+        st.lastMs = Date.now() - started;
+        st.lastOkAt = Date.now();
+        lastServed = { key: st.key, via: b.via, model: b.model, ms: st.lastMs, at: st.lastOkAt };
+        return text;
       } catch (err) {
         lastError = err;
+        st.failures++;
+        st.lastMs = Date.now() - started;
+        st.lastError = err.message.slice(0, 200);
+        st.lastErrorAt = Date.now();
         console.error(`[gemma] ${b.via}:${b.model}`, err.message.slice(0, 120));
         if (err.status && err.status !== 429 && err.status < 500) break;
       }
@@ -111,7 +145,7 @@ function routePrompt(message, sessions, attachmentNote = "", context = "") {
 Read the developer's message and decide ONE action. Reply with ONLY a JSON object, no prose.
 
 Actions:
-- "spawn": start a new agent on a task. Needs "agent" (claude, codex or opencode; default claude) and "prompt" (clear task for the agent) and "name" (2-3 word kebab-case label).
+- "spawn": start a new agent on a task. Needs "agent" (claude, codex or opencode; default ${settings.get().defaultAgent}) and "prompt" (clear task for the agent) and "name" (2-3 word kebab-case label).
 - "send": send a follow-up to an existing session. Needs "session" (exact name from the list) and "prompt".
 - "list": show sessions.
 - "status": ask what a session (or all) is doing. "session" optional.
@@ -126,6 +160,7 @@ Always include "risk". Agents work in a sandboxed git worktree, so reading, writ
 Use "high" ONLY when the task would affect something outside that worktree: git push or merge to a shared branch, deploy or release, delete data or files outside the project, change cloud/infrastructure/DNS, read or change secrets or credentials, send messages or emails to other people, or spend money.
 Also "high": any request to read, print, show, send or upload secrets, .env files, SSH keys, API keys, tokens or passwords, or any file outside the workspace (e.g. ~/, /etc).
 Examples: "add a dark mode toggle" -> low. "write tests for auth" -> low. "fix the navbar bug" -> low. "deploy to production" -> high. "push to main" -> high. "rotate the API keys" -> high. "drop the users table" -> high. "show me the .env file" -> high. "cat ~/.ssh/id_rsa" -> high.
+When "risk" is "high", also include "category": one of push, deploy, delete, secrets, infra, messaging, spend (or "other").
 Include "reason": one short sentence.
 The message may be English, Urdu or Roman Urdu. Write "prompt" in English.
 
@@ -135,7 +170,7 @@ ${list}
 ${context ? `${context}\n\n` : ""}${attachmentNote}Developer message:
 """${message}"""
 
-JSON shape: {"action":"","agent":null,"session":null,"name":null,"prompt":null,"risk":"low","reason":"","reply":null${attachmentNote ? ',"description":""' : ""}}`;
+JSON shape: {"action":"","agent":null,"session":null,"name":null,"prompt":null,"risk":"low","category":null,"reason":"","reply":null${attachmentNote ? ',"description":""' : ""}}`;
   return prompt;
 }
 
