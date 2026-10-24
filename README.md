@@ -83,6 +83,10 @@ Then message the paired number from an allowlisted phone: `help`.
 - **mcp-whatsapp** by Sealjay, [MIT](https://github.com/Sealjay/mcp-whatsapp/blob/main/LICENSE).
 - **DNotifier** JavaScript SDK `@dnotifier-realtime/dnotifier` for realtime events.
 
+## Contributed upstream
+
+Building Hukam surfaced a gap in the WhatsApp MCP daemon: text messages had no visible ID, so they could not be reacted to or marked read. We fixed it and sent it back: [Sealjay/mcp-whatsapp#82](https://github.com/Sealjay/mcp-whatsapp/pull/82).
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
