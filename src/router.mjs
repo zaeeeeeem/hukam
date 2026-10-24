@@ -248,10 +248,12 @@ async function watch(session, chat, startedAt = Date.now()) {
   }
 }
 
-// The owner's yes/no on a risky task, from WhatsApp ("yes k3f9") or the portal.
+// The owner's yes/no on a risky task, from WhatsApp ("yes k3f9") or the portal. Runs inside the trace of the
+// message that asked, so the portal shows the task's whole journey in one place.
 async function decide(code, ok, via = "whatsapp") {
   const p = pending.get(code);
   if (!p) return null;
+  if (p.trace && bus.currentTrace() !== p.trace) return bus.withTrace(p.trace, () => decide(code, ok, via));
   pending.delete(code);
   decisions.unshift({ code, ok, via, at: Date.now(), askedAt: p.at, prompt: p.intent.prompt, reason: p.intent.reason, category: p.intent.category || null,
     chatId: p.chat, chat: chatLabel(p.chat), from: p.sender?.name || null });
@@ -438,6 +440,7 @@ async function handle(chat, msg, sender = { phone: chat }) {
     if (!owner) return reply(chat, "🔒 Only the owner can approve or cancel risky tasks.");
     if (!pending.has(intent.code)) return reply(chat, `No pending approval with code ${intent.code}.`);
     if (intent.ok && msg.id) wa.react(chat, msg.id, "✅", sender.jid);
+    bus.emit("intent", { model: "fast-path", ms: 0, intent, chatId: chat });
     await decide(intent.code, intent.ok, portal ? "portal" : "whatsapp");
     return;
   }
@@ -470,7 +473,7 @@ async function handle(chat, msg, sender = { phone: chat }) {
 
   if (intent.risk === "high" && ["spawn", "send"].includes(intent.action) && gated(intent)) {
     const c = code();
-    pending.set(c, { code: c, intent, chat, sender, at: Date.now(), chatLabel: chatLabel(chat) });
+    pending.set(c, { code: c, intent, chat, sender, at: Date.now(), chatLabel: chatLabel(chat), trace: bus.currentTrace() });
     saveApprovals();
     bus.emit("gate", { code: c, reason: intent.reason, prompt: intent.prompt, category: intent.category || null, chatId: chat, chat: chatLabel(chat), from: sender.name || null });
     const ask = owner ? `Reply \`yes ${c}\` to run or \`no ${c}\` to cancel.` : `The owner must approve: \`yes ${c}\` to run or \`no ${c}\` to cancel.`;
