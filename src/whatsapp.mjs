@@ -6,7 +6,7 @@ let rpcId = 0;
 export async function call(name, args) {
   const res = await fetch(DAEMON, {
     method: "POST",
-    // Hukam only ever writes to allowlisted numbers, so it skips the daemon's anti-spam send interval.
+    // Hukam only ever writes to allowlisted numbers and groups, so it skips the daemon's anti-spam send interval.
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "X-Rate-Limit-Override": "true" },
     body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
   });
@@ -35,6 +35,7 @@ export function parseMessages(text) {
       return {
         ts,
         id: id || media?.[2] || null,
+        from,
         fromMe: from === "Me",
         media: media?.[1] ?? null,
         body: (media ? body.slice(media[0].length) : body).trim(),
@@ -42,32 +43,54 @@ export function parseMessages(text) {
     });
 }
 
-export async function recent(phone, limit = 10) {
+// A chat target is a 1:1 phone number (digits) or a group JID ("<id>@g.us").
+export const jid = (target) => (target.includes("@") ? target : `${target}@s.whatsapp.net`);
+export const isGroup = (target) => target.endsWith("@g.us");
+
+export async function recent(target, limit = 10, sender) {
   const text = await call("list_messages", {
-    chat_jid: `${phone}@s.whatsapp.net`,
+    chat_jid: jid(target),
     limit,
     context_before: 0,
     context_after: 0,
+    ...(sender ? { sender_phone_number: sender } : {}),
   });
   return parseMessages(text).sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
+// Groups we belong to: JID -> { name, members: [{ jid, phone, lid }] }. Members are keyed by LID in "lid" groups.
+export async function groups() {
+  const text = await call("list_groups", {});
+  const list = JSON.parse(text.slice(text.indexOf("[")));
+  const user = (j) => (j || "").split("@")[0].split(":")[0];
+  return new Map(
+    list.map((g) => [
+      g.JID,
+      { name: g.Name, members: (g.Participants || []).map((p) => ({ jid: p.JID, phone: user(p.PhoneNumber), lid: user(p.LID || p.JID) })) },
+    ]),
+  );
+}
+
 // Decrypts a media message into the daemon's store and returns its absolute path.
-export async function downloadMedia(phone, messageId) {
-  const text = await call("download_media", { chat_jid: `${phone}@s.whatsapp.net`, message_id: messageId });
+export async function downloadMedia(target, messageId) {
+  const text = await call("download_media", { chat_jid: jid(target), message_id: messageId });
   const result = JSON.parse(text.slice(text.indexOf("{"), text.indexOf("}", text.indexOf('"Path"')) + 1));
   if (!result.Success || !result.Path) throw new Error(`download_media: ${result.Message}`);
   return result.Path;
 }
 
-export const send = (phone, message) => call("send_message", { recipient: phone, message });
+export const send = (target, message) => call("send_message", { recipient: target, message });
 
-export const react = (phone, messageId, emoji) =>
-  messageId ? call("send_reaction", { chat_jid: `${phone}@s.whatsapp.net`, message_id: messageId, emoji }).catch(() => {}) : null;
+// senderJid is required by WhatsApp in group chats (the participant who wrote the message).
+export const react = (target, messageId, emoji, senderJid) =>
+  messageId
+    ? call("send_reaction", { chat_jid: jid(target), message_id: messageId, emoji, ...(senderJid ? { sender_jid: senderJid } : {}) }).catch(() => {})
+    : null;
 
 // Blue ticks: tell the sender we have read their message.
-export const markRead = (phone, messageId) =>
-  messageId ? call("mark_read", { chat_jid: `${phone}@s.whatsapp.net`, message_ids: [messageId] }).catch(() => {}) : null;
+export const markRead = (target, messageId, senderJid) =>
+  messageId
+    ? call("mark_read", { chat_jid: jid(target), message_ids: [messageId], ...(senderJid ? { sender_jid: senderJid } : {}) }).catch(() => {})
+    : null;
 
-export const typing = (phone, active = true) =>
-  call("send_typing", { chat_jid: `${phone}@s.whatsapp.net`, active }).catch(() => {});
+export const typing = (target, active = true) => call("send_typing", { chat_jid: jid(target), active }).catch(() => {});

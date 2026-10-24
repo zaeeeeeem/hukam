@@ -8,18 +8,25 @@ import * as superset from "./superset.mjs";
 import * as bus from "./bus.mjs";
 import * as voice from "./voice.mjs";
 
-const ALLOW = (process.env.WA_ALLOW || "").split(",").map((s) => s.trim()).filter(Boolean);
+const list = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
+const ALLOW = list(process.env.WA_ALLOW);
+// Groups where any member may command Hukam. Approvals and stop stay owner-only.
+const GROUPS = list(process.env.WA_GROUPS);
+const OWNER = process.env.WA_OWNER || "923124487312";
+const OWNER_LID = (process.env.WA_OWNER_LID || "237077966905376@lid").split("@")[0];
 const POLL_MS = Number(process.env.WA_POLL_MS || 2000);
 const STATE_FILE = new URL("../.hukam-state.json", import.meta.url);
 const AGENTS = new Set(["claude", "codex", "opencode"]);
 const ACKS = ["👀", "🫡", "⚡", "🔥", "🚀", "🧠", "🛠️", "👍", "✨", "🤝"];
 
-if (!ALLOW.length) throw new Error("WA_ALLOW is empty: set at least one allowed phone number");
+if (!ALLOW.length && !GROUPS.length) throw new Error("WA_ALLOW and WA_GROUPS are empty: set at least one allowed phone number or group");
 if (!process.env.HUKAM_WORKSPACE) throw new Error("HUKAM_WORKSPACE is not set");
 
-// name -> { name, agent, terminal, prompt, status, owner }
+// name -> { name, agent, terminal, prompt, status, owner } (owner = chat that started it: phone or group JID)
 const sessions = new Map(existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, "utf8")) : []);
-const pending = new Map(); // approval code -> { intent, phone }
+const pending = new Map(); // approval code -> { intent, chat, sender }
+const groupInfo = new Map(); // group JID -> { name, members: [{ jid, phone, lid }] }
+let groupsAt = 0;
 const seen = new Set();
 
 const save = () => writeFileSync(STATE_FILE, JSON.stringify([...sessions], null, 2));
@@ -32,10 +39,26 @@ function uniqueName(base) {
   return name;
 }
 
-async function reply(phone, text) {
-  bus.emit("reply", { text });
-  await wa.send(phone, text);
+// `chat` is where we answer: a 1:1 phone number or a group JID.
+async function reply(chat, text) {
+  bus.emit("reply", { text, chat: chatLabel(chat) });
+  await wa.send(chat, text);
 }
+
+const chatLabel = (chat) => (wa.isGroup(chat) ? groupInfo.get(chat)?.name || "group" : "DM");
+
+async function refreshGroups(force = false) {
+  if (!GROUPS.length || (!force && Date.now() - groupsAt < 30_000)) return;
+  groupsAt = Date.now();
+  try {
+    for (const [j, g] of await wa.groups()) if (GROUPS.includes(j)) groupInfo.set(j, g);
+  } catch (err) {
+    console.error("[groups]", err.message);
+  }
+}
+
+// The owner may show up as a phone number or (in "lid" groups) as a LID; both resolve through the member list.
+const isOwner = (sender) => sender.phone === OWNER || (!!sender.lid && sender.lid === OWNER_LID);
 
 // Commands that never need the model: approvals, list, help, and "@name message".
 function fastPath(text) {
@@ -77,7 +100,7 @@ function screenTail(screen) {
   return body.slice(-4).join("\n").slice(0, 500) || "Done. Open the dashboard for details.";
 }
 
-async function watch(session, phone) {
+async function watch(session, chat) {
   session.status = "working";
   save();
   bus.emit("status", { name: session.name, status: "working" });
@@ -86,8 +109,8 @@ async function watch(session, phone) {
   session.status = state === "timeout" ? "working" : state;
   save();
   bus.emit("status", { name: session.name, status: session.status });
-  if (state === "timeout") return watch(session, phone);
-  if (state === "exited") return reply(phone, `⛔ *${session.name}* exited.`);
+  if (state === "timeout") return watch(session, chat);
+  if (state === "exited") return reply(chat, `⛔ *${session.name}* exited.`);
 
   let summary;
   let screen = "";
@@ -100,86 +123,96 @@ async function watch(session, phone) {
   }
   bus.emit("done", { name: session.name, state, summary });
   if (state === "blocked") {
-    await reply(phone, `🔐 *${session.name}* needs you:\n${summary}\n\nReply \`@${session.name} <answer>\` or \`stop ${session.name}\`.`);
+    await reply(chat, `🔐 *${session.name}* needs you:\n${summary}\n\nReply \`@${session.name} <answer>\` or \`stop ${session.name}\`.`);
   } else {
-    await reply(phone, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
+    await reply(chat, `✅ *${session.name}* finished:\n${summary}\n\nFollow up with \`@${session.name} <message>\`.`);
   }
 }
 
-async function execute(intent, phone) {
+async function execute(intent, chat, sender = {}) {
   switch (intent.action) {
     case "list":
     case "status":
-      return reply(phone, listText());
+      return reply(chat, listText());
     case "help":
-      return reply(phone, HELP);
+      return reply(chat, HELP);
     case "chat":
-      return reply(phone, intent.reply || HELP);
+      return reply(chat, intent.reply || HELP);
     case "stop": {
       const s = sessions.get(intent.session);
-      if (!s) return reply(phone, `No session named ${intent.session}.\n\n${listText()}`);
+      if (!s) return reply(chat, `No session named ${intent.session}.\n\n${listText()}`);
       s.status = "stopped";
       save();
       await superset.close(s.terminal).catch(() => {});
       bus.emit("status", { name: s.name, status: "stopped" });
-      return reply(phone, `⏹️ Stopped *${s.name}*.`);
+      return reply(chat, `⏹️ Stopped *${s.name}*.`);
     }
     case "send": {
       const s = sessions.get(intent.session);
-      if (!s) return reply(phone, `No session named ${intent.session}.\n\n${listText()}`);
+      if (!s) return reply(chat, `No session named ${intent.session}.\n\n${listText()}`);
       await superset.sendText(s.terminal, intent.prompt);
       await superset.sendKeys(s.terminal, "enter").catch(() => {});
       bus.emit("send", { name: s.name, prompt: intent.prompt });
-      await reply(phone, `➡️ Sent to *${s.name}*.`);
-      return watch(s, phone);
+      await reply(chat, `➡️ Sent to *${s.name}*.`);
+      return watch(s, chat);
     }
     case "spawn": {
       const agent = AGENTS.has(intent.agent) ? intent.agent : "claude";
       const name = uniqueName(intent.name || intent.prompt?.split(/\s+/).slice(0, 3).join("-"));
       const terminal = await superset.spawn(agent, `${intent.prompt}
 
-(Sent from WhatsApp through Hukam. Work only inside this workspace. Do not git push, deploy, or delete anything outside it. Finish with a two-line summary of what you changed.)`);
-      const s = { name, agent, terminal, prompt: intent.prompt, status: "working", owner: phone };
+(Sent from WhatsApp through Hukam. Work only inside this workspace. Do not git push, deploy, or delete anything outside it. Never read, print or send .env files, keys, tokens or other secrets. Finish with a two-line summary of what you changed.)`);
+      const s = { name, agent, terminal, prompt: intent.prompt, status: "working", owner: chat };
       sessions.set(name, s);
       save();
       bus.emit("spawn", { name, agent, prompt: intent.prompt });
-      await reply(phone, `🚀 Started *${name}* on ${agent}.\nI'll message you when it's done.`);
-      return watch(s, phone);
+      const hi = wa.isGroup(chat) && sender.name ? `${sender.name}, started` : "Started";
+      await reply(chat, `🚀 ${hi} *${name}* on ${agent}.\nI'll message ${wa.isGroup(chat) ? "here" : "you"} when it's done.`);
+      return watch(s, chat);
     }
     default:
-      return reply(phone, HELP);
+      return reply(chat, HELP);
   }
 }
 
-async function handle(phone, msg) {
+// sender: { jid, phone, lid, name } of whoever wrote msg. jid is only needed (and set) in groups.
+async function handle(chat, msg, sender = { phone: chat }) {
+  const owner = isOwner(sender);
   if (msg.media === "audio") {
-    wa.markRead(phone, msg.id);
-    wa.react(phone, msg.id, "🎙️");
+    wa.markRead(chat, msg.id, sender.jid);
+    wa.react(chat, msg.id, "🎙️", sender.jid);
     const started = Date.now();
-    msg.body = await voice.transcribe(await wa.downloadMedia(phone, msg.id));
+    msg.body = await voice.transcribe(await wa.downloadMedia(chat, msg.id));
     bus.emit("voice", { text: msg.body, ms: Date.now() - started });
-    if (!msg.body) return reply(phone, "🎙️ Couldn't hear anything in that voice note.");
-    await wa.send(phone, `🎙️ _${msg.body}_`);
+    if (!msg.body) return reply(chat, "🎙️ Couldn't hear anything in that voice note.");
+    await wa.send(chat, `🎙️ _${msg.body}_`);
   } else if (msg.media) {
-    return reply(phone, `I can read text and voice notes. ${msg.media} isn't supported yet.`);
+    return reply(chat, `I can read text and voice notes. ${msg.media} isn't supported yet.`);
   }
-  bus.emit("inbound", { from: phone.slice(-4), text: msg.body, voice: msg.media === "audio" });
+  bus.emit("inbound", {
+    from: sender.name || (sender.phone || sender.lid || "?").slice(-4),
+    chat: chatLabel(chat),
+    owner,
+    text: msg.body,
+    voice: msg.media === "audio",
+  });
   // Instant acknowledgement: blue ticks plus a random emoji reaction (or a short text if the message has no ID).
-  wa.markRead(phone, msg.id);
+  wa.markRead(chat, msg.id, sender.jid);
   const ack = ACKS[Math.floor(Math.random() * ACKS.length)];
-  if (msg.id) wa.react(phone, msg.id, ack);
-  else wa.send(phone, `${ack} on it`).catch(() => {});
-  wa.typing(phone, true);
+  if (msg.id) wa.react(chat, msg.id, ack, sender.jid);
+  else wa.send(chat, `${ack} on it`).catch(() => {});
+  wa.typing(chat, true);
 
   let intent = fastPath(msg.body);
   if (intent?.action === "approval") {
+    if (!owner) return reply(chat, "🔒 Only the owner can approve or cancel risky tasks.");
     const p = pending.get(intent.code);
-    if (!p) return reply(phone, `No pending approval with code ${intent.code}.`);
+    if (!p) return reply(chat, `No pending approval with code ${intent.code}.`);
     pending.delete(intent.code);
     bus.emit("approval", { code: intent.code, ok: intent.ok, prompt: p.intent.prompt });
-    if (!intent.ok) return reply(phone, "❌ Cancelled.");
-    wa.react(phone, msg.id, "✅");
-    return execute(p.intent, phone);
+    if (!intent.ok) return reply(p.chat, "❌ Cancelled.");
+    wa.react(chat, msg.id, "✅", sender.jid);
+    return execute(p.intent, p.chat, p.sender);
   }
 
   if (!intent) {
@@ -193,13 +226,16 @@ async function handle(phone, msg) {
     }
   }
 
+  if (intent.action === "stop" && !owner) return reply(chat, "🔒 Only the owner can stop agents.");
+
   if (intent.risk === "high" && ["spawn", "send"].includes(intent.action)) {
     const c = code();
-    pending.set(c, { intent, phone });
+    pending.set(c, { intent, chat, sender });
     bus.emit("gate", { code: c, reason: intent.reason, prompt: intent.prompt });
-    return reply(phone, `⚠️ Gemma flagged this as risky: ${intent.reason}\n\n"${intent.prompt}"\n\nReply \`yes ${c}\` to run or \`no ${c}\` to cancel.`);
+    const ask = owner ? `Reply \`yes ${c}\` to run or \`no ${c}\` to cancel.` : `The owner must approve: \`yes ${c}\` to run or \`no ${c}\` to cancel.`;
+    return reply(chat, `⚠️ Gemma flagged this as risky: ${intent.reason}\n\n"${intent.prompt}"\n\n${ask}`);
   }
-  return execute(intent, phone);
+  return execute(intent, chat, sender);
 }
 
 let polling = false;
@@ -213,6 +249,49 @@ async function poll() {
   }
 }
 
+const keyOf = (m) => m.id || `${m.ts}|${m.body}`;
+
+function dispatch(chat, m, sender) {
+  handle(chat, m, sender).catch(async (err) => {
+    console.error("[handle]", err);
+    bus.emit("error", { message: err.message });
+    await wa.send(chat, `⚠️ ${err.message}`).catch(() => {});
+  });
+}
+
+// The daemon's text lines show a sender's display name, not their JID. To react / mark read in a group we need the
+// participant JID, so new message IDs are attributed by re-querying the group filtered by each member's phone and LID.
+async function attribute(group, ids) {
+  const found = new Map();
+  for (const member of groupInfo.get(group)?.members || []) {
+    for (const who of new Set([member.phone, member.lid].filter(Boolean))) {
+      for (const m of await wa.recent(group, 20, who)) if (ids.has(keyOf(m))) found.set(keyOf(m), member);
+    }
+  }
+  return found;
+}
+
+async function pollGroup(group) {
+  const fresh = (await wa.recent(group)).filter((m) => !seen.has(keyOf(m)));
+  if (!fresh.length) return;
+  for (const m of fresh) if (m.fromMe) seen.add(keyOf(m));
+  const theirs = fresh.filter((m) => !m.fromMe);
+  if (!theirs.length) return;
+  const ids = new Set(theirs.map(keyOf));
+  let found = await attribute(group, ids);
+  if (found.size < ids.size) {
+    await refreshGroups(true); // someone new (e.g. just added) is not in the cached member list yet
+    found = await attribute(group, ids);
+  }
+  for (const m of theirs) {
+    seen.add(keyOf(m));
+    const member = found.get(keyOf(m));
+    const name = m.from && !/^\d+(@|$)/.test(m.from) ? m.from : null;
+    const sender = member ? { ...member, name } : { name, phone: null, lid: null, jid: null };
+    dispatch(group, m, sender);
+  }
+}
+
 async function pollOnce() {
   for (const phone of ALLOW) {
     let messages;
@@ -223,25 +302,34 @@ async function pollOnce() {
       continue;
     }
     for (const m of messages) {
-      const key = m.id || `${m.ts}|${m.body}`;
+      const key = keyOf(m);
       if (seen.has(key)) continue;
       seen.add(key);
       if (m.fromMe) continue;
-      handle(phone, m).catch(async (err) => {
-        console.error("[handle]", err);
-        bus.emit("error", { message: err.message });
-        await wa.send(phone, `⚠️ ${err.message}`).catch(() => {});
-      });
+      dispatch(phone, m, { phone, name: null });
+    }
+  }
+  await refreshGroups();
+  for (const group of GROUPS) {
+    try {
+      await pollGroup(group);
+    } catch (err) {
+      console.error("[poll group]", err.message);
     }
   }
 }
 
 // Seed: never replay history from before startup.
-for (const phone of ALLOW) {
-  for (const m of await wa.recent(phone, 30)) seen.add(m.id || `${m.ts}|${m.body}`);
+for (const chat of [...ALLOW, ...GROUPS]) {
+  for (const m of await wa.recent(chat, 30)) seen.add(keyOf(m));
 }
+await refreshGroups(true);
 await bus.start();
 for (const s of sessions.values()) if (s.status === "working") watch(s, s.owner);
-bus.emit("ready", { allow: ALLOW.map((p) => `…${p.slice(-4)}`), model: gemma.model });
-console.log(`Hukam listening for ${ALLOW.length} number(s), polling every ${POLL_MS} ms`);
+bus.emit("ready", {
+  allow: ALLOW.map((p) => `…${p.slice(-4)}`),
+  groups: GROUPS.map((g) => `${groupInfo.get(g)?.name || "?"} (${groupInfo.get(g)?.members.length ?? 0} members)`),
+  model: gemma.model,
+});
+console.log(`Hukam listening for ${ALLOW.length} number(s) and ${GROUPS.length} group(s), polling every ${POLL_MS} ms`);
 setInterval(poll, POLL_MS);

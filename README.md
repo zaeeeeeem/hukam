@@ -50,9 +50,13 @@ Hukam router  (this repo)
 | `stop dark-mode-toggle` | Closes that session |
 | `yes k3f9` / `no k3f9` | Approves or cancels a task Gemma flagged as risky |
 
+**Group mode.** Add Hukam to a WhatsApp group and list its JID in `WA_GROUPS`. Any member can send text or voice notes there; Hukam reacts, routes and posts agent updates back in the group, addressing the sender by name.
+
 ## Security
 
-- **Allowlist.** Only numbers in `WA_ALLOW` are read. Everyone else is ignored.
+- **Allowlist.** Only numbers in `WA_ALLOW` and groups in `WA_GROUPS` are read. Everyone else, and every other group, is ignored.
+- **Owner-only controls.** In groups anyone can start or follow up on agents, but only the owner (`WA_OWNER`, matched by phone or LID) can approve risky tasks (`yes <code>`) or `stop` an agent.
+- **Secrets.** Requests to read or send `.env` files, keys, tokens or files outside the workspace are rated high risk and need the owner's approval; agents are also told never to reveal secrets.
 - **Risk gate.** Gemma rates every task. Anything that could push, deploy, delete, touch secrets or spend money waits for an explicit `yes <code>` reply.
 - **Guardrail prompt.** Every spawned agent is told to stay inside its workspace and not push or deploy.
 - **Isolation.** Agents run in a separate Superset worktree, not your main checkout.

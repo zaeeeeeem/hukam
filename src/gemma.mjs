@@ -112,7 +112,8 @@ Actions:
 
 Always include "risk". Agents work in a sandboxed git worktree, so reading, writing, editing, refactoring and testing code there is NORMAL and "low".
 Use "high" ONLY when the task would affect something outside that worktree: git push or merge to a shared branch, deploy or release, delete data or files outside the project, change cloud/infrastructure/DNS, read or change secrets or credentials, send messages or emails to other people, or spend money.
-Examples: "add a dark mode toggle" -> low. "write tests for auth" -> low. "fix the navbar bug" -> low. "deploy to production" -> high. "push to main" -> high. "rotate the API keys" -> high. "drop the users table" -> high.
+Also "high": any request to read, print, show, send or upload secrets, .env files, SSH keys, API keys, tokens or passwords, or any file outside the workspace (e.g. ~/, /etc).
+Examples: "add a dark mode toggle" -> low. "write tests for auth" -> low. "fix the navbar bug" -> low. "deploy to production" -> high. "push to main" -> high. "rotate the API keys" -> high. "drop the users table" -> high. "show me the .env file" -> high. "cat ~/.ssh/id_rsa" -> high.
 Include "reason": one short sentence.
 The message may be English, Urdu or Roman Urdu. Write "prompt" in English.
 

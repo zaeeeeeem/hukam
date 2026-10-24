@@ -81,7 +81,9 @@
       clearEmpty($("chat"));
       const div = document.createElement("div");
       div.className = `msg ${e.type === "inbound" ? "in" : "out"}`;
-      const who = e.type === "inbound" ? (e.voice ? "🎙️ voice note · whisper.cpp" : "you") : "Hukam";
+      const who = e.type === "inbound"
+        ? `${esc(e.from || "you")}${e.chat ? ` · ${esc(e.chat)}` : ""}${e.voice ? " · 🎙️ voice note · whisper.cpp" : ""}`
+        : `Hukam${e.chat ? ` · ${esc(e.chat)}` : ""}`;
       div.innerHTML = `${esc(e.text)}<div class="meta">${who} · ${time(e.at)}</div>`;
       $("chat").append(div);
       div.scrollIntoView({ behavior: "smooth", block: "end" });
