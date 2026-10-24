@@ -1,10 +1,13 @@
-// "ZAEEM GOAT" + heart on the Arduino UNO Q 8x13 LED matrix.
+// Scrolling text + heart on the Arduino UNO Q 8x13 LED matrix.
 //
 // Loop:
-//   1. "ZAEEM GOAT" scrolls left with a motion-blur trail
+//   1. the current text scrolls left with a motion-blur trail
 //   2. a heart follows the text in and stops in the centre
 //   3. the heart beats (lub-dub) with a ripple on each beat
-//   4. the heart sparkles away, then the name starts again
+//   4. the heart sparkles away, then the text starts again
+//
+// The text comes from the web page (python/main.py) over Bridge:
+// Bridge.call("set_text", "HELLO"). New text interrupts the current loop.
 //
 // Older scenes (sparkle, helm, drop, badge) are kept below but not looped.
 //
@@ -12,6 +15,7 @@
 // grayscale buffer passed to matrix.draw().
 
 #include <Arduino_LED_Matrix.h>
+#include <Arduino_RouterBridge.h>
 #include <math.h>
 #include <string.h>
 
@@ -24,11 +28,29 @@ static const uint8_t MAX_B = 7;  // 3-bit grayscale: 0..7
 Arduino_LED_Matrix matrix;
 uint8_t fb[W * H];
 
+// set_text() runs on the Bridge thread; loop() picks the text up from here.
+static const size_t TEXT_MAX = 64;
+char currentText[TEXT_MAX] = "HACKTOBERFEST HACK DAY LAHORE X CNSPK IS LIVE";
+char pendingText[TEXT_MAX];
+volatile bool textPending = false;
+
+void set_text(String text) {
+  text.toUpperCase();
+  text.toCharArray(pendingText, TEXT_MAX);
+  textPending = true;
+}
+
 // ---------- framebuffer helpers ----------
 
 void show(uint16_t ms) {
   matrix.draw(fb);
   delay(ms);
+}
+
+// Like show(), but tells the caller to bail out when new text arrived.
+bool frame(uint16_t ms) {
+  show(ms);
+  return textPending;
 }
 
 void clearFb() { memset(fb, 0, sizeof(fb)); }
@@ -234,6 +256,7 @@ void sceneBadge() {
 }
 
 // Text scrolls in, the heart rides behind it and parks in the centre.
+// Every frame() returns early if the web page sent new text.
 void sceneNameHeart(const char *text) {
   const int heartX = (W - HEART_W) / 2;
   const int gap = 4;
@@ -244,11 +267,11 @@ void sceneNameHeart(const char *text) {
     fade(4);  // two-frame trail
     drawBig(text, x, 1, MAX_B);
     drawRows(HEART_BIG, HEART_H, x + width + gap, 0, MAX_B);
-    show(70);
+    if (frame(70)) return;
   }
   clearFb();
   drawRows(HEART_BIG, HEART_H, heartX, 0, MAX_B);
-  show(400);
+  if (frame(400)) return;
 
   // heartbeat: big-small-big, rest; a faint ring spreads on each "lub"
   for (int beat = 0; beat < 5; beat++) {
@@ -261,32 +284,35 @@ void sceneNameHeart(const char *text) {
           if (d < 0.7f) px(x, y, 3 - (int)(d * 4));
         }
       drawRows(HEART_BIG, HEART_H, heartX, 0, MAX_B);
-      show(50);
+      if (frame(50)) return;
     }
     clearFb();
     drawRows(HEART_SMALL, HEART_SMALL_H, heartX + 1, 1, 5);
-    show(110);
+    if (frame(110)) return;
     clearFb();
     drawRows(HEART_BIG, HEART_H, heartX, 0, MAX_B);
-    show(150);
+    if (frame(150)) return;
     clearFb();
     drawRows(HEART_SMALL, HEART_SMALL_H, heartX + 1, 1, 5);
-    show(450);
+    if (frame(450)) return;
   }
 
   // sparkle away: pixels drop out while stray stars twinkle
   clearFb();
   drawRows(HEART_BIG, HEART_H, heartX, 0, MAX_B);
-  show(300);
+  if (frame(300)) return;
   for (int f = 0; f < 25; f++) {
     for (int i = 0; i < 5; i++) fb[random(W * H)] = 0;
     fade(f < 15 ? 0 : 1);
     if (f < 15) px(random(W), random(H), random(3, MAX_B + 1));
-    show(50);
+    if (frame(50)) return;
   }
-  for (int i = 0; i < 6; i++) { fade(2); show(40); }
+  for (int i = 0; i < 6; i++) {
+    fade(2);
+    if (frame(40)) return;
+  }
   clearFb();
-  show(300);
+  frame(300);
 }
 
 // ---------- main ----------
@@ -297,8 +323,16 @@ void setup() {
   randomSeed(analogRead(A0));
   clearFb();
   show(10);
+
+  Bridge.begin();
+  Bridge.provide("set_text", set_text);
 }
 
 void loop() {
-  sceneNameHeart("ZAEEM GOAT");
+  if (textPending) {
+    strncpy(currentText, pendingText, TEXT_MAX - 1);
+    currentText[TEXT_MAX - 1] = '\0';
+    textPending = false;
+  }
+  sceneNameHeart(currentText);
 }

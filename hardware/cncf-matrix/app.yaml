@@ -5,7 +5,7 @@
 name: cncf-matrix
 
 # A brief description of what the application does.
-description: "CNCF on the LED matrix with animations"
+description: "Type text on a web page; the LED matrix scrolls it and ends with a beating heart"
 
 # The icon for the application, can be an emoji or a short string.
 icon: ☸️
@@ -15,4 +15,5 @@ icon: ☸️
 ports: []
 
 # A list of bricks used by this application.
-bricks: []
+bricks:
+  - arduino:web_ui

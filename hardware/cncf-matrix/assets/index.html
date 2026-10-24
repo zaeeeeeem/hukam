@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LED Matrix · UNO Q</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #121821;
+      --line: #1f2a37;
+      --text: #e6edf3;
+      --muted: #8b98a7;
+      --led: 96, 165, 250;
+      --accent: #60a5fa;
+      --error: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { width: min(560px, 100% - 32px); }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+
+    .board {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 22px;
+    }
+    .matrix {
+      display: grid;
+      grid-template-columns: repeat(13, 1fr);
+      gap: 6px;
+      aspect-ratio: 13 / 8;
+    }
+    .matrix i {
+      border-radius: 50%;
+      background: rgba(var(--led), 0.07);
+      transition: background 60ms linear, box-shadow 60ms linear;
+    }
+    .preview-note { color: var(--muted); font-size: 13px; margin: 10px 0 0; text-align: center; }
+
+    form { display: flex; gap: 8px; margin-top: 20px; }
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    button {
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #06121f;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: wait; }
+
+    .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-top: 8px; }
+    .status { margin-top: 18px; min-height: 22px; }
+    .status b { letter-spacing: 0.04em; }
+    .status.error { color: var(--error); }
+
+    .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .presets button {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      font-weight: 500;
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+    .presets button:hover { color: var(--text); border-color: var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>LED Matrix</h1>
+  <p class="sub">Type a message. The UNO Q scrolls it and finishes with a beating heart.</p>
+
+  <section class="board" aria-label="Preview of the LED matrix">
+    <div class="matrix" id="matrix"></div>
+    <p class="preview-note" id="preview-note">Live preview of what the board shows</p>
+  </section>
+
+  <form id="form" autocomplete="off">
+    <input id="text" maxlength="60" placeholder="ZAEEM GOAT" aria-label="Message" required>
+    <button id="send" type="submit">Send</button>
+  </form>
+  <div class="meta">
+    <span>A–Z, 0–9 and ! ? . , - ' :</span>
+    <span id="count">0 / 60</span>
+  </div>
+
+  <div class="presets" id="presets"></div>
+  <p class="status" id="status" role="status"></p>
+</main>
+
+<script>
+  const W = 13, H = 8, MAX_B = 7;
+  const PRESETS = ["HACKTOBERFEST HACK DAY LAHORE X CNSPK IS LIVE", "ZAEEM GOAT", "CNCF", "CNS PK", "HELLO LAHORE"];
+
+  const $ = (id) => document.getElementById(id);
+  const matrixEl = $("matrix");
+  const input = $("text");
+  const statusEl = $("status");
+
+  // ---- matrix preview: same frames and timings as sketch.ino ----
+
+  const cells = Array.from({ length: W * H }, () => matrixEl.appendChild(document.createElement("i")));
+  const fb = new Uint8Array(W * H);
+  let font = { glyphs: {}, heart: [], heartSmall: [] };
+  let playToken = 0;
+
+  const LED = getComputedStyle(document.documentElement).getPropertyValue("--led").trim();
+
+  function render() {
+    fb.forEach((v, i) => {
+      const a = v / MAX_B;
+      cells[i].style.background = v ? `rgba(${LED}, ${0.15 + 0.85 * a})` : "";
+      cells[i].style.boxShadow = v > 4 ? `0 0 ${4 + 6 * a}px rgba(${LED}, ${0.6 * a})` : "";
+    });
+  }
+
+  const px = (x, y, v) => {
+    if (x < 0 || x >= W || y < 0 || y >= H || v <= 0) return;
+    const i = y * W + x;
+    fb[i] = Math.max(fb[i], Math.min(v, MAX_B));
+  };
+  const clear = () => fb.fill(0);
+  const fade = (s) => fb.forEach((v, i) => (fb[i] = v > s ? v - s : 0));
+
+  function drawRows(rows, x, y, v) {
+    rows.forEach((row, r) => [...row].forEach((c, k) => c === "#" && px(x + k, y + r, v)));
+  }
+
+  function drawText(text, x, y, v) {
+    const x0 = x;
+    for (const ch of text) {
+      const g = font.glyphs[ch];
+      if (g) drawRows(g, x, y, v);
+      x += (g ? g[0].length : 3) + 1;
+    }
+    return x - x0 - 1;
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Resolves false if a newer play() started, so the old loop stops.
+  async function frame(ms, token) {
+    render();
+    await sleep(ms);
+    return token === playToken;
+  }
+
+  async function play(text) {
+    const token = ++playToken;
+    if (!font.heart.length) return;
+    const heartW = font.heart[0].length;
+    const heartX = Math.floor((W - heartW) / 2);
+    const width = drawText(text, 0, 0, 0);
+
+    while (token === playToken) {
+      clear();
+      for (let x = W; x + width + 4 >= heartX; x--) {
+        fade(4);
+        drawText(text, x, 1, MAX_B);
+        drawRows(font.heart, x + width + 4, 0, MAX_B);
+        if (!(await frame(70, token))) return;
+      }
+      for (let beat = 0; beat < 5; beat++) {
+        for (const [rows, x, y, v, ms] of [
+          [font.heart, heartX, 0, MAX_B, 150],
+          [font.heartSmall, heartX + 1, 1, 5, 110],
+          [font.heart, heartX, 0, MAX_B, 150],
+          [font.heartSmall, heartX + 1, 1, 5, 450],
+        ]) {
+          clear();
+          drawRows(rows, x, y, v);
+          if (!(await frame(ms, token))) return;
+        }
+      }
+      for (let f = 0; f < 25; f++) {
+        for (let i = 0; i < 5; i++) fb[Math.floor(Math.random() * W * H)] = 0;
+        if (f >= 15) fade(1);
+        else px(Math.floor(Math.random() * W), Math.floor(Math.random() * H), 3 + Math.floor(Math.random() * 5));
+        if (!(await frame(50, token))) return;
+      }
+      clear();
+      if (!(await frame(300, token))) return;
+    }
+  }
+
+  // ---- talking to the board ----
+
+  function setStatus(html, isError = false) {
+    statusEl.innerHTML = html;
+    statusEl.classList.toggle("error", isError);
+  }
+
+  const escape = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  async function send(text) {
+    const btn = $("send");
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/text?text=${encodeURIComponent(text)}`, { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) return setStatus(escape(data.error), true);
+      setStatus(`On the board: <b>${escape(data.text)}</b> ♥`);
+      play(data.text);
+    } catch {
+      setStatus("Cannot reach the board. Is the app running?", true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (input.value.trim()) send(input.value);
+  });
+  input.addEventListener("input", () => ($("count").textContent = `${input.value.length} / ${input.maxLength}`));
+
+  for (const p of PRESETS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = p;
+    b.addEventListener("click", () => {
+      input.value = p;
+      input.dispatchEvent(new Event("input"));
+      send(p);
+    });
+    $("presets").appendChild(b);
+  }
+
+  fetch("/api/state")
+    .then((r) => r.json())
+    .then((state) => {
+      font = state;
+      if (!font.heart.length) $("preview-note").textContent = "Preview unavailable (font not found)";
+      setStatus(`On the board: <b>${escape(state.text)}</b> ♥`);
+      play(state.text);
+    })
+    .catch(() => setStatus("Cannot reach the board. Is the app running?", true));
+</script>
+</body>
+</html>
