@@ -24,7 +24,7 @@ Hukam router  (this repo)
    ├─ Gemma 4 via Gemini API: message ──► {action, agent, session, prompt, risk}
    ├─ Risk gate: risky tasks wait for "yes <code>" on WhatsApp
    ├─ Superset CLI: agents create / terminals send / agents wait / terminals read
-   ├─ DNotifier realtime ──► live dashboard (localhost:4747)
+   ├─ DNotifier realtime ──► portal (localhost:4747)
    └─ When an agent settles: Gemma squashes its terminal into 3 lines ──► WhatsApp
 ```
 
@@ -37,8 +37,11 @@ Hukam router  (this repo)
 | `src/preview.mjs` | Headless Chrome screenshot of the agent's page, sent back to WhatsApp |
 | `src/artifacts.mjs` | Images an agent creates (`outputs/`, SVG rendered to PNG) are sent back to the chat that started it |
 | `src/voice.mjs` | Voice notes: ffmpeg + whisper.cpp, fully local |
-| `src/bus.mjs` | Event stream to the dashboard: DNotifier realtime, local SSE fallback |
-| `public/index.html` | Live dashboard: WhatsApp feed, Gemma decisions, agent cards |
+| `src/bus.mjs` | Event stream (DNotifier realtime + local SSE), per-message trace ids, and the web server for the portal |
+| `src/api.mjs` | JSON API for the portal: state, sessions, commands, approvals, settings, health, gallery |
+| `src/settings.mjs` | Owner settings from the portal (`.hukam-settings.json`), read live by the router |
+| `portal/` | The Hukam portal: Vite + React + TypeScript + Tailwind, built to `portal/dist` |
+| `public/index.html` | The original one-page dashboard, kept at `/classic` as a fallback |
 
 ## What you can send
 
@@ -61,6 +64,34 @@ Hukam router  (this repo)
 
 **Group mode.** Add Hukam to a WhatsApp group and list its JID in `WA_GROUPS`. Any member can send text or voice notes there; Hukam reacts, routes and posts agent updates back in the group, addressing the sender by name.
 
+## The portal
+
+`npm start` serves the portal at http://localhost:4747 from the same process, on 127.0.0.1 only. No separate server.
+
+| Page | What it shows |
+|---|---|
+| **Live** (`/`) | Each message followed through WhatsApp → Whisper → Gemma 4 → risk gate → Superset → agent → reply, with timings per hop. Conversations, Gemma decisions (action, agent, risk, reason, what Gemma saw, model, latency) and agent cards side by side, an event log with filters, today's counters, and a command box that talks to Hukam as the owner. |
+| **Agents** (`/sessions`) | Every session with status, agent, model, chat and task; detail page with the terminal tail, summary, images, timeline, follow-up and stop. |
+| **Chats** (`/chats`) | DMs and groups: conversation history with Hukam, group members, per-chat image memory, sessions started there. |
+| **Approvals** (`/approvals`) | Risky tasks waiting for the owner, with approve/cancel, and every past decision. |
+| **Gallery** (`/gallery`) | Photos and PDFs people sent, images agents made, live-preview screenshots. |
+| **Use cases** (`/use-cases`) | What Hukam can do, the exact WhatsApp message for each (copy), and "Try it" through the command box. |
+| **Settings** (`/settings`) | Allowlist, groups, owner, default agent, model per agent, Gemma backend order and models, risk gate and categories, ack emoji, voice, attachments, previews, artifact return, poll interval. Saved to `.hukam-settings.json` (gitignored) and applied live; `.env`-only values are shown read-only with "Requires restart". Secret values never reach the browser. |
+| **System** (`/system`) | WhatsApp daemon (paired number, connected), Gemma backends (latency, failures, last error), Superset CLI, Whisper, Chrome, pdftotext, DNotifier, router uptime and recent errors. |
+
+Add `?demo=1` to any portal URL for scripted demo traffic (clearly marked "Demo data"; nothing is sent to WhatsApp or agents). `/classic` is the old dashboard; `/flow` redirects to the portal.
+
+**Build.** `portal/dist` is committed, so `npm start` never needs a build step at demo time. After changing `portal/src`:
+
+```bash
+npm run portal:install   # once
+npm run portal:build     # writes portal/dist; the router serves it on the next request
+npm run portal:dev       # optional: Vite dev server on :5174, proxied to a running router
+npm run check            # node --check on src/*.mjs + portal typecheck
+```
+
+**Portal API** (localhost only, JSON): `GET /api/state`, `GET /api/sessions/:name` (+ `/terminal`), `POST /api/command {text, chat?}` (runs as the owner through the same path as WhatsApp; replies go to the owner DM or the chosen allowed chat), `POST /api/sessions/:name/send {text}`, `POST /api/sessions/:name/stop`, `POST /api/approvals/:code {ok}`, `GET|PUT /api/settings`, `GET /api/health`, `GET /api/gallery`, `GET /api/events`. Requests must come to `localhost`/`127.0.0.1` by name (blocks DNS rebinding) and writes must be JSON from the same origin (blocks cross-site requests from other tabs).
+
 ## Security
 
 - **Allowlist.** Only numbers in `WA_ALLOW` and groups in `WA_GROUPS` are read. Everyone else, and every other group, is ignored.
@@ -75,7 +106,7 @@ Hukam router  (this repo)
 - **Fallbacks.** Gemma is tried on the Gemini API (26B, then 31B), then on Vertex AI, with retries on rate limits. If every backend fails, a strict regex parser (`claude: <task>`, `@name <msg>`, `list`) keeps working, and agent summaries fall back to the agent's own closing lines.
 - **Voice stays local.** Voice notes are transcribed on your machine with whisper.cpp; audio is never sent to a cloud API.
 
-Known limits: the WhatsApp daemon uses the unofficial `whatsmeow` multi-device protocol, so use a spare number. The dashboard receives DNotifier credentials from localhost and is for local demo use only.
+Known limits: the WhatsApp daemon uses the unofficial `whatsmeow` multi-device protocol, so use a spare number. The portal receives DNotifier credentials from localhost and is for local use only.
 
 ## Run it
 
@@ -84,7 +115,7 @@ Requirements: Node 20+, ffmpeg, [whisper.cpp](https://github.com/ggml-org/whispe
 ```bash
 npm install
 cp .env.example .env   # fill in GEMINI_API_KEY, WA_ALLOW, HUKAM_WORKSPACE, optional DNOTIFIER_*
-npm start
+npm start               # serves the prebuilt portal from portal/dist
 open http://localhost:4747
 ```
 

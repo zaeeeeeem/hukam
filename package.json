@@ -4,8 +4,11 @@
   "description": "Command your coding agents from WhatsApp. Gemma 4 routes, Superset runs, DNotifier streams.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node --env-file-if-exists=.env src/router.mjs"
+    "start": "node --env-file-if-exists=.env src/router.mjs",
+    "portal:install": "npm --prefix portal install",
+    "portal:build": "npm --prefix portal run build",
+    "portal:dev": "npm --prefix portal run dev",
+    "check": "for f in src/*.mjs; do node --check $f || exit 1; done && npm --prefix portal run typecheck"
   },
   "keywords": [],
   "author": "",
