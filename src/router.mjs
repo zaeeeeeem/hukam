@@ -413,12 +413,30 @@ async function handle(chat, msg, sender = { phone: chat }) {
   } else if (msg.media) {
     return reply(chat, `I can read text, voice notes, photos and PDFs. ${msg.media} isn't supported yet.`);
   }
+  // A WhatsApp reply ("tagging" a message) beats every guess: a quoted photo/PDF becomes the attachment,
+  // quoted text becomes context, and a quoted agent result points at that agent's session.
+  if (msg.replyTo && !portal) {
+    const quoted = await wa.findMessage(chat, msg.replyTo).catch(() => null);
+    if (quoted) {
+      const session = [...sessions.keys()].find((name) => quoted.body.includes(`*${name}*`) || quoted.body.includes(`${name}:`));
+      if (!attachment && ["image", "document"].includes(quoted.media) && cfg().attachments.enabled) {
+        attachment = await saveAttachment(chat, quoted);
+        if (!attachment) return;
+        if (attachment.kind === "image") rememberImage(chat, { path: attachment.path, source: quoted.fromMe ? "agent" : "user", ...(session && { session }) });
+      }
+      msg.rawBody = msg.body; // fixed commands ("yes k3f9" as a reply to the gate) still match on what was typed
+      const said = quoted.body.trim() ? `: "${quoted.body.trim().slice(0, 600)}"` : "";
+      const what = quoted.media ? `${quoted.fromMe ? "Hukam's" : "the user's"} ${quoted.media === "document" ? "file" : quoted.media}` : `${quoted.fromMe ? "Hukam's" : "an earlier"} message`;
+      msg.body = `${msg.body}\n\n(This is a reply to ${what}${said}.${attachment ? ` The file it refers to is ${attachment.path}.` : ""}${session ? ` It belongs to session "${session}"; prefer sending the follow-up to that session.` : ""})`;
+    }
+  }
   bus.emit("inbound", {
     from: sender.name || (sender.phone || sender.lid || "?").slice(-4),
     chat: chatLabel(chat),
     chatId: chat,
     owner,
-    text: msg.body,
+    text: msg.rawBody ?? msg.body,
+    ...(msg.replyTo && { replyTo: msg.replyTo }),
     voice: msg.media === "audio",
     ...(portal && { source: "portal" }),
     ...(sender.phone && { phone: sender.phone }),
@@ -435,7 +453,7 @@ async function handle(chat, msg, sender = { phone: chat }) {
     wa.typing(chat, true);
   }
 
-  let intent = attachment ? null : fastPath(msg.body);
+  let intent = attachment ? null : fastPath(msg.rawBody ?? msg.body);
   if (intent?.action === "approval") {
     if (!owner) return reply(chat, "🔒 Only the owner can approve or cancel risky tasks.");
     if (!pending.has(intent.code)) return reply(chat, `No pending approval with code ${intent.code}.`);

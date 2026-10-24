@@ -21,20 +21,21 @@ export async function call(name, args) {
   return text;
 }
 
-// "[2026-10-24 06:51:47] [ID: 3EB0...] Chat: Name From: Sender: body..." (body may span lines)
-const HEADER = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (?:\[ID: ([A-Za-z0-9]+)\] )?Chat: .*? From: (.*?): ([\s\S]*)$/;
+// "[2026-10-24 06:51:47] [ID: 3EB0...] [Reply to: 3EB0...] Chat: Name From: Sender: body..." (body may span lines)
+const HEADER = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (?:\[ID: ([A-Za-z0-9]+)\] )?(?:\[Reply to: ([A-Za-z0-9]+)\] )?Chat: .*? From: (.*?): ([\s\S]*)$/;
 
 export function parseMessages(text) {
   return text
     .split(/\n(?=\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] )/)
     .map((chunk) => chunk.match(HEADER))
     .filter(Boolean)
-    .map(([, ts, id, from, body]) => {
+    .map(([, ts, id, replyTo, from, body]) => {
       // Media lines look like "[audio - Message ID: X - Chat JID: Y] caption"
       const media = body.match(/^\[(\w+) - Message ID: ([A-Za-z0-9]+) - Chat JID: [^\]]+\]\s*/);
       return {
         ts,
         id: id || media?.[2] || null,
+        replyTo: replyTo || null,
         from,
         fromMe: from === "Me",
         media: media?.[1] ?? null,
@@ -46,6 +47,11 @@ export function parseMessages(text) {
 // A chat target is a 1:1 phone number (digits) or a group JID ("<id>@g.us").
 export const jid = (target) => (target.includes("@") ? target : `${target}@s.whatsapp.net`);
 export const isGroup = (target) => target.endsWith("@g.us");
+
+// The message a reply quotes. The daemon has no lookup by ID, so search the chat's recent history.
+export async function findMessage(target, id, limit = 80) {
+  return (await recent(target, limit)).find((m) => m.id === id) || null;
+}
 
 export async function recent(target, limit = 10, sender) {
   const text = await call("list_messages", {
