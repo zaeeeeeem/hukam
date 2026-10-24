@@ -68,7 +68,8 @@ export async function start({ inbox, outputs } = {}) {
       return;
     }
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(await readFile(new URL("../public/index.html", import.meta.url)));
+    const page = /^\/flow\/?(\?|$)/.test(req.url) ? "flow.html" : "index.html";
+    res.end(await readFile(new URL(`../public/${page}`, import.meta.url)));
   }).listen(port, "127.0.0.1", () => console.log(`[bus] dashboard http://localhost:${port}`));
 }
 
