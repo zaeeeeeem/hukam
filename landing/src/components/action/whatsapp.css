@@ -1,0 +1,138 @@
+/* WhatsApp (iOS, dark) replica. Colours from WhatsApp's dark theme tokens. */
+.phone {
+  --wa-bg: #0b141a;
+  --wa-bar: #1f2c34;
+  --wa-in: #202c33;
+  --wa-out: #005c4b;
+  --wa-text: #e9edef;
+  --wa-meta: #8696a0;
+  --wa-meta-out: rgba(233, 237, 239, 0.62);
+  --wa-blue: #53bdeb;
+  --wa-green: #00a884;
+
+  position: relative; width: 360px; height: 720px; padding: 9px; border-radius: 56px;
+  background: linear-gradient(145deg, #3a3a40, #121214 40%, #2a2a2e 75%, #0d0d0f);
+  box-shadow:
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 40px 80px -20px rgba(0, 0, 0, 0.9),
+    0 0 120px -30px rgba(123, 108, 255, 0.35);
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Segoe UI', Roboto, sans-serif;
+  color: var(--wa-text);
+  -webkit-font-smoothing: antialiased;
+}
+.phone-btn { position: absolute; width: 3px; border-radius: 2px; background: #2a2a2e; }
+.phone-btn.b1 { left: -3px; top: 150px; height: 34px; }
+.phone-btn.b2 { left: -3px; top: 200px; height: 58px; }
+.phone-btn.b3 { right: -3px; top: 220px; height: 86px; }
+.phone-screen { position: relative; height: 100%; border-radius: 47px; overflow: hidden; background: var(--wa-bg); display: flex; flex-direction: column; }
+
+.wa-status { position: relative; flex: none; height: 50px; padding: 16px 30px 0 34px; display: flex; justify-content: space-between; background: var(--wa-bar); font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.wa-island { position: absolute; top: 11px; left: 50%; width: 104px; height: 30px; margin-left: -52px; border-radius: 20px; background: #000; }
+.wa-status-icons { display: flex; align-items: center; gap: 5px; height: 17px; }
+.wa-battery { position: relative; width: 24px; height: 11.5px; border-radius: 3.5px; border: 1px solid rgba(255, 255, 255, 0.45); padding: 1.5px; }
+.wa-battery::after { content: ''; position: absolute; right: -3.5px; top: 3.5px; width: 1.5px; height: 4px; border-radius: 0 1px 1px 0; background: rgba(255, 255, 255, 0.45); }
+.wa-battery i { display: block; width: 72%; height: 100%; border-radius: 1.5px; background: #fff; }
+
+.wa-header { flex: none; height: 54px; display: flex; align-items: center; gap: 8px; padding: 0 14px 4px 4px; background: var(--wa-bar); border-bottom: 0.5px solid rgba(134, 150, 160, 0.15); }
+.wa-back { color: var(--wa-green); flex: none; }
+.wa-avatar { width: 36px; height: 36px; border-radius: 50%; overflow: hidden; flex: none; }
+.wa-avatar svg { border-radius: 50%; }
+.wa-title { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.2; }
+.wa-title b { font-size: 16px; font-weight: 600; }
+.wa-title small { font-size: 12.5px; color: var(--wa-meta); transition: color 0.3s; }
+.wa-title small.is-typing { color: var(--wa-green); }
+.wa-actions { display: flex; gap: 22px; color: var(--wa-green); }
+
+.wa-chat { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* Doodle wallpaper: a small hand-drawn tile at low opacity, like WhatsApp's default. */
+.wa-wall {
+  position: absolute; inset: 0; opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' fill='none' stroke='%23fff' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 18h20a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4h-12l-6 5v-5h-2a4 4 0 0 1-4-4V22a4 4 0 0 1 4-4z'/%3E%3Ccircle cx='86' cy='22' r='8'/%3E%3Cpath d='M82 22h8M86 18v8'/%3E%3Cpath d='M70 70l6 12 12-20'/%3E%3Cpath d='M20 78c4-8 14-8 18 0s-14 18-18 0z'/%3E%3Cpath d='M98 92l4 8 9 1-6 6 2 9-9-4-8 4 2-9-6-6 9-1z'/%3E%3Cpath d='M44 104h18M53 95v18'/%3E%3Cpath d='M58 40c0-6 10-6 10 0v6H58z'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+.wa-msgs { position: absolute; inset: 0; padding: 10px 12px 12px; display: flex; flex-direction: column; justify-content: flex-end; }
+.wa-date { align-self: center; margin-bottom: auto; padding-top: 2px; }
+.wa-date span { display: inline-block; padding: 5px 12px; border-radius: 8px; background: #182229; color: var(--wa-meta); font-size: 12px; font-weight: 500; box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13); }
+
+.wa-row { display: flex; margin-top: 2px; }
+.wa-row.has-tail { margin-top: 10px; }
+.wa-row.has-reaction { margin-bottom: 16px; }
+.wa-row.in { justify-content: flex-start; padding-left: 8px; }
+.wa-row.out { justify-content: flex-end; padding-right: 8px; }
+
+.wa-bubble {
+  position: relative; max-width: 82%; padding: 6px 8px 7px 9px; border-radius: 7.5px;
+  font-size: 14.2px; line-height: 19px; overflow-wrap: anywhere;
+  box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+}
+.in .wa-bubble { background: var(--wa-in); }
+.out .wa-bubble { background: var(--wa-out); }
+.wa-bubble b { font-weight: 600; }
+.wa-bubble em { font-style: italic; }
+.has-tail.in .wa-bubble { border-top-left-radius: 0; }
+.has-tail.out .wa-bubble { border-top-right-radius: 0; }
+.has-tail .wa-bubble::before { content: ''; position: absolute; top: 0; width: 8px; height: 13px; background: inherit; }
+.has-tail.in .wa-bubble::before { left: -8px; clip-path: path('M 8 0 L 8 13 L 1.2 2.9 C 0.4 1.5 1 0 2.8 0 Z'); }
+.has-tail.out .wa-bubble::before { right: -8px; clip-path: path('M 0 0 L 0 13 L 6.8 2.9 C 7.6 1.5 7 0 5.2 0 Z'); }
+
+/* Time + ticks sit bottom-right; a spacer at the end of the text keeps them from overlapping it. */
+.wa-bubble::after { content: ''; display: inline-block; width: 56px; height: 1px; }
+.out .wa-bubble::after { width: 74px; }
+.wa-meta { position: absolute; right: 7px; bottom: 4px; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; line-height: 15px; color: var(--wa-meta); white-space: nowrap; }
+.out .wa-meta { color: var(--wa-meta-out); }
+.wa-ticks { color: var(--wa-meta-out); transition: color 0.35s; }
+.wa-ticks.is-read { color: var(--wa-blue); }
+
+.wa-reaction {
+  position: absolute; bottom: -19px; display: grid; place-items: center;
+  height: 26px; min-width: 32px; padding: 0 6px; border-radius: 13px;
+  background: var(--wa-in); border: 2px solid var(--wa-bg); font-size: 14px; line-height: 1;
+}
+.out .wa-reaction { right: 10px; }
+.in .wa-reaction { left: 10px; }
+
+/* Voice note */
+.wa-bubble.is-voice { width: 270px; padding: 7px 8px 6px 6px; }
+.wa-bubble.is-voice::after { display: none; }
+.wa-voice { display: grid; grid-template-columns: 34px 1fr 46px; grid-template-rows: 40px 14px; column-gap: 8px; align-items: center; }
+.wa-voice-play { grid-column: 1; grid-row: 1; display: grid; place-items: center; color: var(--wa-meta-out); }
+.wa-voice-track { position: relative; grid-column: 2; grid-row: 1; height: 26px; display: flex; align-items: center; }
+.wa-voice-wave { display: flex; align-items: center; gap: 2px; width: 100%; }
+.wa-voice-wave i { flex: 1; max-width: 3px; border-radius: 2px; background: rgba(233, 237, 239, 0.45); }
+.wa-voice-dot { position: absolute; left: 0; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -2px; border-radius: 50%; background: var(--wa-blue); }
+.wa-voice-track.is-playing .wa-voice-dot { animation: vn-scrub 2.4s linear forwards; }
+@keyframes vn-scrub { to { transform: translateX(138px); } }
+.wa-voice-avatar { grid-column: 3; grid-row: 1 / span 2; position: relative; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(135deg, #ffb36b, #a8390a); font-weight: 600; font-size: 18px; color: #fff; }
+.wa-voice-avatar i { position: absolute; left: -3px; bottom: -1px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--wa-out); color: var(--wa-blue); }
+.wa-voice-len { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--wa-meta-out); }
+.is-voice .wa-meta { right: 62px; bottom: 5px; }
+
+/* Image bubble */
+.wa-bubble.is-flush { padding: 3px 3px 22px; }
+.wa-bubble.is-flush::after { display: none; }
+.wa-image { width: 252px; border-radius: 6px; overflow: hidden; background: #111; }
+.wa-image.is-logo img { width: 252px; height: 220px; object-fit: cover; }
+.wa-caption { display: block; padding: 5px 6px 0; font-size: 13px; color: var(--wa-text); font-family: var(--font-mono); letter-spacing: -0.02em; }
+
+/* The agent's page, as it appears in the screenshot Hukam sends back */
+.mini-page { background: #fbf4ea; color: #2b1a0e; font-family: var(--font-sans); }
+.mp-nav { display: flex; align-items: center; gap: 10px; height: 22px; padding: 0 10px; font-size: 8.5px; color: #7a5a40; }
+.mp-nav b { margin-right: auto; color: #2b1a0e; font-weight: 700; font-size: 9.5px; }
+.mp-hero { position: relative; height: 104px; overflow: hidden; }
+.mp-hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 30% 50%; }
+.mp-hero::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(25, 12, 3, 0.85) 0%, rgba(25, 12, 3, 0.4) 55%, transparent 80%); }
+.mp-hero-copy { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 13px 12px; color: #fff; }
+.mp-hero-copy small { font-size: 7px; letter-spacing: 0.08em; text-transform: uppercase; color: #ffcf9a; }
+.mp-hero-copy strong { font-family: var(--font-display); font-weight: 600; font-size: 15px; line-height: 1.05; letter-spacing: -0.02em; }
+.mp-btn { margin-top: 3px; padding: 3px 8px; border-radius: 99px; background: #e8792a; font-size: 7.5px; font-weight: 600; }
+.mp-menu { list-style: none; margin: 0; padding: 6px 10px 8px; }
+.mp-menu li { display: flex; justify-content: space-between; padding: 3.5px 0; font-size: 8.5px; border-bottom: 1px dashed rgba(122, 90, 64, 0.25); }
+.mp-menu li:last-child { border-bottom: 0; }
+.mp-menu b { font-weight: 700; color: #b4511a; }
+
+.wa-composer { flex: none; height: 82px; padding: 8px 14px 30px; display: flex; align-items: center; gap: 14px; background: var(--wa-bar); color: var(--wa-text); }
+.wa-composer svg { flex: none; }
+.wa-composer svg:first-child { color: var(--wa-text); }
+.wa-input { flex: 1; height: 34px; padding: 0 14px; display: flex; align-items: center; border-radius: 17px; background: #2a3942; color: var(--wa-meta); font-size: 15px; }
+.phone-home { position: absolute; left: 50%; bottom: 8px; width: 124px; height: 4.5px; margin-left: -62px; border-radius: 3px; background: rgba(255, 255, 255, 0.85); }

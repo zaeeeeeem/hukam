@@ -77,6 +77,10 @@ Hukam router  (this repo)
 
 Known limits: the WhatsApp daemon uses the unofficial `whatsmeow` multi-device protocol, so use a spare number. The dashboard receives DNotifier credentials from localhost and is for local demo use only.
 
+## Landing page
+
+The marketing page lives in [`landing/`](landing/) (`cd landing && npm install && npm run dev`).
+
 ## Run it
 
 Requirements: Node 20+, ffmpeg, [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`brew install whisper-cpp` plus a `ggml-base.bin` model) for voice notes, the [Superset](https://superset.sh) CLI with a local workspace, a running [mcp-whatsapp](https://github.com/Sealjay/mcp-whatsapp) daemon paired to a spare number, and a Gemini API key.

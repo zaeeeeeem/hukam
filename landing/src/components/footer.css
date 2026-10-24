@@ -1,0 +1,32 @@
+/* <main> scrolls up over the footer with rounded bottom corners; the footer waits underneath. */
+#main { position: relative; z-index: 1; background: var(--bg); border-radius: 0 0 40px 40px; box-shadow: 0 1px 0 var(--line), 0 30px 60px rgba(0, 0, 0, 0.6); }
+
+.footer {
+  position: relative; z-index: 0; bottom: 0; overflow: hidden;
+  margin-top: -40px; padding-top: 40px;
+  background: #07070b;
+}
+@media (min-height: 700px) { .footer { position: sticky; } }
+.footer-glow {
+  position: absolute; left: 50%; bottom: -260px; width: 1400px; height: 520px; margin-left: -700px; pointer-events: none;
+  background:
+    radial-gradient(closest-side at 30% 50%, rgba(58, 47, 158, 0.55), transparent),
+    radial-gradient(closest-side at 72% 55%, rgba(168, 57, 10, 0.4), transparent);
+  filter: blur(40px);
+}
+.footer-inner { position: relative; padding-top: 72px; }
+.footer-top { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 56px; }
+.footer-credits { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px 14px; font-size: 13.5px; color: var(--dim); }
+.footer-credits a { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); transition: color 0.25s; }
+.footer-credits a:hover { color: #fff; }
+.footer-sep { width: 3px; height: 3px; border-radius: 50%; background: var(--dim); }
+.dot-wordmark { position: relative; width: 100%; overflow: hidden; }
+.dot-wordmark canvas { position: absolute; left: 0; top: 0; width: 100%; touch-action: pan-y; }
+
+@media (max-width: 809px) {
+  #main { border-radius: 0 0 28px 28px; }
+  .footer { margin-top: -28px; padding-top: 28px; }
+  .footer-inner { padding-top: 48px; }
+  .footer-top { flex-direction: column; align-items: flex-start; gap: 18px; padding-bottom: 40px; }
+  .footer-credits { justify-content: flex-start; }
+}

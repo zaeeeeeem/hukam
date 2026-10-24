@@ -1,20 +1,15 @@
-# Hukam frontend
+# Hukam landing page
 
-## Run locally
+Marketing page for Hukam (WhatsApp -> Gemma 4 -> coding agents). Vite + React, no backend.
 
 ```bash
 npm install
-npm run dev
+npm run dev -- --port 5180   # http://localhost:5180
+npm run build                # static output in dist/
 ```
 
-Then open the local URL printed by Vite, usually `http://localhost:5173/`.
+- Sections live in `src/components/` (`Hero`, `Why`, `action/` for the WhatsApp flow, `Steps`, `Faq`, `Footer` + `DotWordmark`).
+- Generated images are in `public/generated/`. Design notes and references: `DESIGN-NOTES.md`.
+- `?story=<0|1>-<0..17>` freezes the "in action" storyboard on one frame (for screenshots).
 
-Copy `.env.example` to `.env` and set `VITE_API_BASE_URL` when connecting the frontend to the backend.
-
-Existing app routes used by the landing page:
-
-- `/app`
-- `/login`
-- `/onboarding`
-
-The landing page uses sample dashboard content. Integration cards are deliberately labeled `Example` or `Planned` until backend capabilities are connected.
+Built on a handoff from another engineer; see the first commit on this folder.
