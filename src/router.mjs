@@ -1,7 +1,10 @@
 // Hukam: command your coding agents from WhatsApp.
 // WhatsApp message -> Gemma 4 decides the action -> Superset runs the agent -> result back on WhatsApp.
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import * as wa from "./whatsapp.mjs";
 import * as gemma from "./gemma.mjs";
 import * as superset from "./superset.mjs";
@@ -17,6 +20,10 @@ const OWNER_LID = (process.env.WA_OWNER_LID || "237077966905376@lid").split("@")
 const POLL_MS = Number(process.env.WA_POLL_MS || 2000);
 const STATE_FILE = new URL("../.hukam-state.json", import.meta.url);
 const AGENTS = new Set(["claude", "codex", "opencode"]);
+// Photos and PDFs are copied into the agent workspace (the playground) so agents can open them.
+const WORKDIR = process.env.HUKAM_WORKSPACE_DIR || fileURLToPath(new URL("../../demo/playground", import.meta.url));
+const INBOX = `${WORKDIR}/inbox`;
+const MAX_ATTACHMENT = 8 * 1024 * 1024;
 const ACKS = ["👀", "🫡", "⚡", "🔥", "🚀", "🧠", "🛠️", "👍", "✨", "🤝"];
 
 if (!ALLOW.length && !GROUPS.length) throw new Error("WA_ALLOW and WA_GROUPS are empty: set at least one allowed phone number or group");
@@ -175,9 +182,63 @@ async function execute(intent, chat, sender = {}) {
   }
 }
 
+// Magic bytes decide the type; WhatsApp's own label is only a hint.
+function sniff(path) {
+  const head = readFileSync(path).subarray(0, 12);
+  const hex = head.toString("hex");
+  if (hex.startsWith("89504e47")) return { kind: "image", ext: "png", mime: "image/png" };
+  if (hex.startsWith("ffd8ff")) return { kind: "image", ext: "jpg", mime: "image/jpeg" };
+  if (head.subarray(0, 4).toString() === "RIFF" && head.subarray(8, 12).toString() === "WEBP") return { kind: "image", ext: "webp", mime: "image/webp" };
+  if (head.subarray(0, 4).toString() === "%PDF") return { kind: "pdf", ext: "pdf", mime: "application/pdf" };
+  return null;
+}
+
+// Download a photo / document, copy it to <workspace>/inbox/<msgId>.<ext> and prepare it for Gemma. Returns null after
+// telling the user why when the file is too big or of a type we can't read.
+async function saveAttachment(chat, msg) {
+  let src;
+  try {
+    src = await wa.downloadMedia(chat, msg.id);
+  } catch (err) {
+    console.error("[download]", err.message);
+    await reply(chat, `Couldn't download that ${msg.media === "image" ? "photo" : "file"} from WhatsApp. Please send it again.`);
+    return null;
+  }
+  const size = statSync(src).size;
+  if (size > MAX_ATTACHMENT) {
+    await reply(chat, `That file is ${(size / 1048576).toFixed(1)} MB. I can read photos and PDFs up to 8 MB.`);
+    return null;
+  }
+  const type = sniff(src);
+  if (!type) {
+    await reply(chat, `I can read photos, PDFs, text and voice notes. That ${msg.media} isn't supported yet.`);
+    return null;
+  }
+  mkdirSync(INBOX, { recursive: true });
+  const file = `${msg.id}.${type.ext}`;
+  copyFileSync(src, `${INBOX}/${file}`);
+  const att = { ...type, file, path: `inbox/${file}`, url: `/inbox/${file}`, size };
+  if (type.kind === "image") att.base64 = readFileSync(src).toString("base64");
+  else {
+    await promisify(execFile)("pdftotext", ["-layout", src, `${INBOX}/${msg.id}.txt`], { timeout: 30_000 }).catch((err) => console.error("[pdftotext]", err.message));
+    att.text = existsSync(`${INBOX}/${msg.id}.txt`) ? readFileSync(`${INBOX}/${msg.id}.txt`, "utf8") : "";
+    if (att.text.trim()) att.textPath = `inbox/${msg.id}.txt`;
+  }
+  return att;
+}
+
+// Gemma down (or the backend can't see images): still start the work, pointing the agent at the saved file.
+function attachmentFallback(caption, att) {
+  const ask = caption || (att.kind === "pdf" ? "Build what this document describes." : "Build what this image shows.");
+  const textNote = att.textPath ? ` Its extracted text is at ${att.textPath}.` : "";
+  return { action: "spawn", agent: "claude", name: `from-${att.kind}`, risk: "low", reason: "Gemma unreachable; attachment fallback.",
+    prompt: `${ask}\n\nThe user's reference ${att.kind === "pdf" ? "document" : "image"} is at ${att.path} — open it and use it.${textNote}` };
+}
+
 // sender: { jid, phone, lid, name } of whoever wrote msg. jid is only needed (and set) in groups.
 async function handle(chat, msg, sender = { phone: chat }) {
   const owner = isOwner(sender);
+  let attachment = null;
   if (msg.media === "audio") {
     wa.markRead(chat, msg.id, sender.jid);
     wa.react(chat, msg.id, "🎙️", sender.jid);
@@ -186,8 +247,13 @@ async function handle(chat, msg, sender = { phone: chat }) {
     bus.emit("voice", { text: msg.body, ms: Date.now() - started });
     if (!msg.body) return reply(chat, "🎙️ Couldn't hear anything in that voice note.");
     await wa.send(chat, `🎙️ _${msg.body}_`);
+  } else if (["image", "document"].includes(msg.media) && msg.id) {
+    wa.markRead(chat, msg.id, sender.jid);
+    wa.react(chat, msg.id, msg.media === "image" ? "🖼️" : "📄", sender.jid);
+    attachment = await saveAttachment(chat, msg);
+    if (!attachment) return;
   } else if (msg.media) {
-    return reply(chat, `I can read text and voice notes. ${msg.media} isn't supported yet.`);
+    return reply(chat, `I can read text, voice notes, photos and PDFs. ${msg.media} isn't supported yet.`);
   }
   bus.emit("inbound", {
     from: sender.name || (sender.phone || sender.lid || "?").slice(-4),
@@ -195,15 +261,16 @@ async function handle(chat, msg, sender = { phone: chat }) {
     owner,
     text: msg.body,
     voice: msg.media === "audio",
+    ...(attachment && { attachment: { kind: attachment.kind, url: attachment.url, name: attachment.file, size: attachment.size } }),
   });
   // Instant acknowledgement: blue ticks plus a random emoji reaction (or a short text if the message has no ID).
   wa.markRead(chat, msg.id, sender.jid);
   const ack = ACKS[Math.floor(Math.random() * ACKS.length)];
-  if (msg.id) wa.react(chat, msg.id, ack, sender.jid);
+  if (msg.id && !attachment) wa.react(chat, msg.id, ack, sender.jid);
   else wa.send(chat, `${ack} on it`).catch(() => {});
   wa.typing(chat, true);
 
-  let intent = fastPath(msg.body);
+  let intent = attachment ? null : fastPath(msg.body);
   if (intent?.action === "approval") {
     if (!owner) return reply(chat, "🔒 Only the owner can approve or cancel risky tasks.");
     const p = pending.get(intent.code);
@@ -215,7 +282,17 @@ async function handle(chat, msg, sender = { phone: chat }) {
     return execute(p.intent, p.chat, p.sender);
   }
 
-  if (!intent) {
+  if (attachment) {
+    try {
+      intent = await gemma.routeWithAttachment(msg.body, [...sessions.values()], attachment);
+      bus.emit("intent", { model: gemma.model, intent, attachment: attachment.url });
+      if (intent.description) await reply(chat, `👀 Gemma sees: ${intent.description}`);
+    } catch (err) {
+      console.error("[gemma attachment]", err.message);
+      intent = attachmentFallback(msg.body, attachment);
+      bus.emit("intent", { model: "attachment-fallback", intent });
+    }
+  } else if (!intent) {
     try {
       intent = await gemma.route(msg.body, [...sessions.values()]);
       bus.emit("intent", { model: gemma.model, intent });
@@ -324,7 +401,7 @@ for (const chat of [...ALLOW, ...GROUPS]) {
   for (const m of await wa.recent(chat, 30)) seen.add(keyOf(m));
 }
 await refreshGroups(true);
-await bus.start();
+await bus.start({ inbox: INBOX });
 for (const s of sessions.values()) if (s.status === "working") watch(s, s.owner);
 bus.emit("ready", {
   allow: ALLOW.map((p) => `…${p.slice(-4)}`),

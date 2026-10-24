@@ -40,6 +40,9 @@
   .blocked .status { color:var(--warn); }
   .exited .status, .stopped .status { color:var(--bad); }
   .empty { color:var(--dim); }
+  .att img { display:block; max-width:240px; max-height:240px; border-radius:8px; margin-bottom:6px; }
+  .att .chip { display:inline-block; padding:4px 10px; border-radius:999px; background:var(--panel); border:1px solid var(--line); color:var(--text); text-decoration:none; font:13px ui-monospace, monospace; margin-bottom:6px; }
+  .intent .seen { margin-top:6px; font-size:14px; }
   @keyframes in { from { opacity:0; transform:translateY(6px); } }
   @keyframes pulse { 50% { opacity:.25; } }
 </style>
@@ -84,7 +87,11 @@
       const who = e.type === "inbound"
         ? `${esc(e.from || "you")}${e.chat ? ` · ${esc(e.chat)}` : ""}${e.voice ? " · 🎙️ voice note · whisper.cpp" : ""}`
         : `Hukam${e.chat ? ` · ${esc(e.chat)}` : ""}`;
-      div.innerHTML = `${esc(e.text)}<div class="meta">${who} · ${time(e.at)}</div>`;
+      const a = e.attachment;
+      const att = !a ? "" : a.kind === "image"
+        ? `<a class="att" href="${esc(a.url)}" target="_blank"><img src="${esc(a.url)}" alt="attachment" /></a>`
+        : `<div class="att"><a class="chip" href="${esc(a.url)}" target="_blank">📄 ${esc(a.name)}</a></div>`;
+      div.innerHTML = `${att}${esc(e.text)}<div class="meta">${who}${a ? ` · ${a.kind === "image" ? "🖼️ photo" : "📄 PDF"}` : ""} · ${time(e.at)}</div>`;
       $("chat").append(div);
       div.scrollIntoView({ behavior: "smooth", block: "end" });
     } else if (e.type === "intent" || e.type === "gate") {
@@ -94,7 +101,7 @@
       div.className = `intent ${i.risk === "high" ? "high" : ""}`;
       div.innerHTML = `<span class="risk">risk: ${esc(i.risk || "low")}${e.code ? ` · code ${esc(e.code)}` : ""}</span>
         <div class="action">${esc(i.action)}${i.agent ? ` → ${esc(i.agent)}` : ""}${i.session ? ` → @${esc(i.session)}` : ""}</div>
-        ${i.prompt ? `<div class="prompt">${esc(i.prompt)}</div>` : ""}<div class="reason">${esc(i.reason || "")} <span class="meta">${esc(e.model || "")}</span></div>`;
+        ${i.description ? `<div class="seen">👀 ${esc(i.description)}</div>` : ""}${i.prompt ? `<div class="prompt">${esc(i.prompt)}</div>` : ""}<div class="reason">${esc(i.reason || "")} <span class="meta">${esc(e.model || "")}</span></div>`;
       $("intents").prepend(div);
     } else if (e.type === "spawn") {
       agents.set(e.name, { agent: e.agent, prompt: e.prompt, status: "working" });

@@ -25,7 +25,8 @@ async function gcloudToken() {
 }
 
 // Vertex AI serves Gemma 4 as a managed model on the global OpenAI-compatible endpoint.
-async function generateVertex(prompt, maxTokens, model) {
+// `image` ({ mime, base64 }) is optional and goes in as an extra content part on both backends.
+async function generateVertex(prompt, maxTokens, model, image) {
   const res = await fetch(
     `https://aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/global/endpoints/openapi/chat/completions`,
     {
@@ -33,7 +34,14 @@ async function generateVertex(prompt, maxTokens, model) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${await gcloudToken()}` },
       body: JSON.stringify({
         model: `google/${model}-maas`,
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          {
+            role: "user",
+            content: image
+              ? [{ type: "image_url", image_url: { url: `data:${image.mime};base64,${image.base64}` } }, { type: "text", text: prompt }]
+              : prompt,
+          },
+        ],
         temperature: 0.1,
         max_tokens: maxTokens,
       }),
@@ -48,7 +56,7 @@ async function generateVertex(prompt, maxTokens, model) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function generate(prompt, maxOutputTokens = 600) {
+async function generate(prompt, maxOutputTokens = 600, image = null) {
   if (!BACKENDS.length) throw new Error("set GEMINI_API_KEY or VERTEX_PROJECT");
   let lastError;
   for (const b of BACKENDS) {
@@ -56,8 +64,8 @@ async function generate(prompt, maxOutputTokens = 600) {
       await sleep(delay);
       try {
         return b.via === "vertex"
-          ? await generateVertex(prompt, maxOutputTokens, b.model)
-          : await generateApi(prompt, maxOutputTokens, b.model);
+          ? await generateVertex(prompt, maxOutputTokens, b.model, image)
+          : await generateApi(prompt, maxOutputTokens, b.model, image);
       } catch (err) {
         lastError = err;
         console.error(`[gemma] ${b.via}:${b.model}`, err.message.slice(0, 120));
@@ -68,16 +76,16 @@ async function generate(prompt, maxOutputTokens = 600) {
   throw lastError;
 }
 
-async function generateApi(prompt, maxOutputTokens, model) {
+async function generateApi(prompt, maxOutputTokens, model, image) {
   const key = process.env.GEMINI_API_KEY;
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      contents: [{ role: "user", parts: [...(image ? [{ inlineData: { mimeType: image.mime, data: image.base64 } }] : []), { text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens, thinkingConfig: { thinkingLevel: "minimal" } },
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(image ? 60_000 : 30_000),
   });
   const json = await res.json();
   if (!res.ok) throw Object.assign(new Error(`Gemma ${res.status}: ${json.error?.message}`), { status: res.status });
@@ -95,7 +103,7 @@ function extractJson(text) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-export async function route(message, sessions) {
+function routePrompt(message, sessions, attachmentNote = "") {
   const list = sessions.length
     ? sessions.map((s) => `- ${s.name} (${s.agent}, ${s.status}): ${s.prompt.slice(0, 80)}`).join("\n")
     : "(none)";
@@ -120,11 +128,35 @@ The message may be English, Urdu or Roman Urdu. Write "prompt" in English.
 Active sessions:
 ${list}
 
-Developer message:
+${attachmentNote}Developer message:
 """${message}"""
 
-JSON shape: {"action":"","agent":null,"session":null,"name":null,"prompt":null,"risk":"low","reason":"","reply":null}`;
-  return extractJson(await generate(prompt));
+JSON shape: {"action":"","agent":null,"session":null,"name":null,"prompt":null,"risk":"low","reason":"","reply":null${attachmentNote ? ',"description":""' : ""}}`;
+  return prompt;
+}
+
+export async function route(message, sessions) {
+  return extractJson(await generate(routePrompt(message, sessions)));
+}
+
+// A photo or PDF arrived (with an optional caption). Gemma looks at it and returns route()'s intent plus "description".
+// att: { kind: "image" | "pdf", path (relative to the agent workspace), mime, base64 (images), text (PDF text) }
+export async function routeWithAttachment(caption, sessions, att) {
+  const what = att.kind === "pdf" ? "a PDF document" : "an image (photo, screenshot, sketch or mockup)";
+  const note = `The developer attached ${what}. It is saved in the agent's workspace at ${att.path}.
+${att.kind === "pdf" ? `Extracted text of the PDF (may be truncated):\n"""${(att.text || "(no text found)").slice(0, 15_000)}"""\n` : "The image is included above.\n"}
+Also include "description": 1-2 plain sentences on what the attachment shows or contains.
+If the message is empty or asks to build, make, fix, add or change something, use "spawn" (agent claude unless another is named) and write "prompt" as a complete task for the agent: say the reference file is at ${att.path} and that it must open it and use it, then describe concretely what to build or fix based on what you see.
+If the message only asks a question about the attachment ("what is this?", "summarize this"), use "chat" and put the answer in "reply" (WhatsApp-sized, max 8 short lines).
+
+`;
+  const image = att.kind === "image" ? { mime: att.mime, base64: att.base64 } : null;
+  const intent = extractJson(await generate(routePrompt(caption || "(no message, only the attachment)", sessions, note), 1200, image));
+  if (["spawn", "send"].includes(intent.action) && !String(intent.prompt || "").includes(att.path)) {
+    intent.prompt = `${intent.prompt || "Build what the attached reference shows."}\n\nReference file: ${att.path} (open it and use it).`;
+  }
+  if (["spawn", "send"].includes(intent.action) && intent.description) intent.prompt += `\nWhat Gemma saw in it: ${intent.description}`;
+  return intent;
 }
 
 export async function summarize(name, screen) {

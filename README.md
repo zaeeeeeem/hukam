@@ -46,6 +46,9 @@ Hukam router  (this repo)
 | `claude: add a dark mode toggle` | Starts a Claude Code session |
 | `@dark-mode-toggle make it remember the choice` | Follow-up to an existing session |
 | 🎙️ *"Claude, add a footer with our address"* | Voice note: transcribed locally, echoed back, then routed like text |
+| 🖼️ photo / screenshot of a sketch, mockup or bug, captioned "build this" or nothing | Gemma 4 looks at the image, replies "👀 Gemma sees: …", and starts an agent pointed at the saved image (`inbox/<id>.jpg`) |
+| 📄 PDF (spec, menu, brief) + "build a page from this" | Text extracted with `pdftotext`, Gemma plans the task, the agent gets the PDF and its text in `inbox/` |
+| 🖼️/📄 + "what is this?" / "summarize" | Gemma answers in chat, no agent started |
 | `list` | All sessions and their state |
 | `stop dark-mode-toggle` | Closes that session |
 | `yes k3f9` / `no k3f9` | Approves or cancels a task Gemma flagged as risky |
@@ -60,6 +63,7 @@ Hukam router  (this repo)
 - **Risk gate.** Gemma rates every task. Anything that could push, deploy, delete, touch secrets or spend money waits for an explicit `yes <code>` reply.
 - **Guardrail prompt.** Every spawned agent is told to stay inside its workspace and not push or deploy.
 - **Isolation.** Agents run in a separate Superset worktree, not your main checkout.
+- **Attachments.** Photos and PDFs (max 8 MB) are saved only inside the agent sandbox (`<workspace>/inbox/`); Gemma sees them via the Gemini API. The dashboard serves them read-only with strict filename checks.
 - **Audit trail.** Every message, decision and agent state change is streamed to the dashboard and logged.
 - **No inbound ports.** The WhatsApp daemon binds to loopback. Hukam only makes outbound calls.
 - **Fallbacks.** Gemma is tried on the Gemini API (26B, then 31B), then on Vertex AI, with retries on rate limits. If every backend fails, a strict regex parser (`claude: <task>`, `@name <msg>`, `list`) keeps working, and agent summaries fall back to the agent's own closing lines.
