@@ -1,0 +1,133 @@
+.hero {
+  position: relative; overflow: hidden; isolation: isolate;
+  padding: 168px 0 120px;
+  min-height: min(980px, 100svh);
+}
+.hero-inner { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: flex-start; }
+
+.hero-art {
+  position: absolute; z-index: 0; top: 40px; right: -220px; width: 1280px; aspect-ratio: 1672 / 941;
+  -webkit-mask: linear-gradient(to bottom, #000 58%, transparent 96%), linear-gradient(to right, transparent 2%, #000 34%);
+  -webkit-mask-composite: source-in;
+  mask: linear-gradient(to bottom, #000 58%, transparent 96%), linear-gradient(to right, transparent 2%, #000 34%);
+  mask-composite: intersect;
+  animation: hero-art-in 1.6s 0.3s var(--ease-out) both;
+}
+.hero-art img { width: 100%; height: 100%; object-fit: cover; animation: hero-float 12s ease-in-out infinite; }
+@keyframes hero-art-in { from { opacity: 0; transform: translate3d(40px, 0, 0) scale(1.03); } to { opacity: 1; transform: none; } }
+@keyframes hero-float { 0%, 100% { transform: translate3d(0, 0, 0); } 50% { transform: translate3d(-10px, 12px, 0); } }
+
+.hero-glow { position: absolute; z-index: -1; pointer-events: none; border-radius: 50%; filter: blur(110px); }
+.hero-glow-a { width: 760px; height: 320px; left: -260px; bottom: -120px; background: radial-gradient(closest-side, rgba(168, 57, 10, 0.75), transparent); }
+.hero-glow-b { width: 900px; height: 340px; right: -320px; bottom: 40px; background: radial-gradient(closest-side, rgba(58, 47, 158, 0.85), transparent); }
+.hero::after {
+  content: ''; position: absolute; inset: auto 0 0; height: 220px; z-index: 1; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, #000);
+}
+
+.hero-title {
+  margin: 20px 0 0;
+  font-size: clamp(46px, 6.4vw, 92px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+.hero-line { display: block; white-space: nowrap; }
+.hero-word { display: inline-block; will-change: transform, opacity, filter; }
+.hero-sub { margin-top: 22px; font-size: 19px; line-height: 1.5; color: var(--muted); }
+.hero-composer { width: 100%; }
+.hero-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+
+/* Composer: a WhatsApp-style message bar that types real Hukam commands */
+.composer-wrap { margin-top: 64px; width: min(600px, 100%); }
+.composer { --radius: 20px; --rim-color: var(--violet); --rim-opacity: 0.75; width: 100%; }
+.composer-inner { background: rgba(10, 10, 14, 0.92); padding: 14px 14px 14px 16px; }
+.composer-top { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 12px; font-size: 12.5px; color: var(--dim); }
+.composer-to { display: inline-flex; align-items: center; gap: 8px; }
+.wa-dot { width: 7px; height: 7px; border-radius: 50%; background: #25d366; box-shadow: 0 0 10px rgba(37, 211, 102, 0.8); }
+.composer-lang {
+  padding: 3px 9px; border-radius: 99px; border: 1px solid var(--line-2); color: var(--muted); font-size: 12px;
+  animation: chip-in 0.5s var(--ease-out);
+}
+@keyframes chip-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.composer-row { display: flex; align-items: center; gap: 10px; }
+.composer-icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; color: var(--dim); }
+.composer-field {
+  flex: 1; min-width: 0; height: 48px; display: flex; align-items: center;
+  padding: 0 16px; border-radius: 12px; background: #16161c; border: 1px solid var(--line);
+  font-size: 16px; overflow: hidden;
+}
+.composer-text { position: relative; display: inline-flex; align-items: center; white-space: nowrap; color: #f3f3f6; unicode-bidi: plaintext; }
+.composer-text.is-sent { animation: sent-out 0.6s var(--ease-out) forwards; }
+@keyframes sent-out { 0% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translate3d(0, -14px, 0); } }
+.composer-placeholder { color: var(--dim); }
+.caret { display: inline-block; width: 1.5px; height: 20px; margin-left: 2px; background: var(--violet-2); animation: caret 1s steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+
+.composer-rec { display: flex; align-items: center; gap: 10px; width: 100%; }
+.rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #f15c6d; animation: rec 1s ease-in-out infinite; }
+@keyframes rec { 50% { opacity: 0.3; } }
+.rec-time { font-variant-numeric: tabular-nums; font-size: 14px; color: var(--muted); }
+.rec-wave { flex: 1; display: flex; align-items: center; gap: 3px; height: 24px; overflow: hidden; }
+.rec-wave i {
+  flex: none; width: 3px; height: 100%; border-radius: 2px; background: var(--violet-2);
+  transform-origin: center; transform: scaleY(0.2);
+  animation: wave 0.9s ease-in-out infinite; animation-delay: calc(var(--k) * -73ms);
+}
+@keyframes wave { 0%, 100% { transform: scaleY(0.18); } 50% { transform: scaleY(0.95); } }
+
+.composer-send {
+  position: relative; width: 48px; height: 48px; flex: none; border-radius: 50%;
+  display: grid; place-items: center; background: #00a884; color: #0b141a;
+  transition: transform 0.3s var(--ease-out);
+}
+.composer-send svg { position: absolute; transition: transform 0.35s var(--ease-out), opacity 0.25s; }
+.composer-send .i-send { opacity: 0; transform: scale(0.4) rotate(-30deg); }
+.composer-send.is-send .i-mic { opacity: 0; transform: scale(0.4); }
+.composer-send.is-send .i-send { opacity: 1; transform: none; }
+.composer-send.is-rec { transform: scale(1.12); box-shadow: 0 0 0 8px rgba(0, 168, 132, 0.16); }
+.phase-sent .composer-send { animation: press 0.4s var(--ease-out); }
+@keyframes press { 40% { transform: scale(0.88); } }
+
+/* Route Gemma picked, under the composer */
+.route { display: flex; align-items: center; gap: 0; margin-top: 18px; padding-left: 18px; }
+.route-chip {
+  display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 99px;
+  border: 1px solid var(--line-2); background: rgba(255, 255, 255, 0.03); font-size: 13px; color: var(--dim);
+  transition: color 0.4s, border-color 0.4s, background 0.4s;
+}
+.route-chip b { font-weight: 500; }
+.route-line { position: relative; width: 36px; height: 1px; background: var(--line-2); overflow: hidden; }
+.route-line i { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--amber), transparent); transform: translateX(-100%); }
+.route.is-on .route-chip { color: #fff; border-color: rgba(169, 155, 255, 0.4); }
+.route.is-on .route-chip.is-agent { background: rgba(123, 108, 255, 0.14); border-color: rgba(169, 155, 255, 0.6); }
+.route.is-on .route-line i { animation: travel 0.6s var(--ease-out) forwards; }
+.route.is-on .route-line:nth-of-type(4) i { animation-delay: 0.2s; }
+.route.is-on .route-chip:nth-child(3) { transition-delay: 0.15s; }
+.route.is-on .route-chip:nth-child(5) { transition-delay: 0.35s; }
+@keyframes travel { to { transform: translateX(100%); } }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); transition: background 0.4s 0.35s; }
+.route.is-on .pulse { background: var(--green); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 1.6s 0.4s infinite; }
+@keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+
+@media (max-width: 1199px) {
+  .hero-art { right: -420px; top: 90px; opacity: 0.8; }
+}
+@media (max-width: 809px) {
+  .hero { padding: 120px 0 72px; min-height: 0; }
+  .hero-art { width: 860px; right: -420px; top: 60px; opacity: 0.55; }
+  .hero-title { font-size: clamp(40px, 11.4vw, 56px); line-height: 1.04; }
+  .hero-sub { font-size: 17px; margin-top: 18px; }
+  .hero-ctas { margin-top: 28px; width: 100%; }
+  .hero-ctas .btn { flex: 1 1 160px; }
+  .composer-wrap { margin-top: 44px; }
+  .composer-inner { padding: 12px; }
+  .composer-icon { display: none; }
+  .composer-field { font-size: 15px; padding: 0 12px; }
+  .route { padding-left: 0; justify-content: center; }
+  .route-chip { padding: 0 10px; font-size: 12px; height: 30px; }
+  .route-line { width: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-art img { animation: none; }
+}
